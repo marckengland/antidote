@@ -1,6 +1,6 @@
 # Antidote recipes
 
-One section per kind of poison. Each gives the snapshot to take, the cure, and
+One section per kind of change. Each gives the snapshot to take, the cure, and
 how to test it. Fill in real names, versions and commit hashes; a recipe with
 placeholders left in it is not an antidote.
 
@@ -22,7 +22,7 @@ placeholders left in it is not an antidote.
 
 Use `scripts/antidote prepare --op <op>`; it writes these for you. For reference:
 
-| Poison | Snapshot | Cure |
+| Change | Snapshot | Cure |
 |---|---|---|
 | Push / merge to a shared branch | remote tip before: `git ls-remote origin refs/heads/main` | Roll forward: `git revert -m 1 <merge>` (merge commit), `git revert <sha>` (squash), or restore the whole tree: `git restore --source=<before> --staged --worktree -- :/` then commit. Rewind (nobody pulled): `git push --force-with-lease=refs/heads/main:<pushed> origin <before>:refs/heads/main` |
 | Force-push | remote tip before | `git push --force-with-lease=refs/heads/<b>:<pushed> origin <before>:refs/heads/<b>` |
@@ -90,7 +90,7 @@ garbage-collected) and that your credentials allow the rollback command.
 
 ## Packages and releases
 
-Publishing is close to irreversible. Treat it as **lethal** and confirm with the user.
+Publishing is close to irreversible. Treat it as **destructive** and confirm with the user.
 
 - **npm:** `npm unpublish <pkg>@<ver>` is limited by npm's unpublish policy
   (freely within 72 hours if nothing depends on it, after that only in narrow

@@ -16,25 +16,25 @@ or that other people depend on, have the cure ready:
 If you cannot make an antidote for a change, stop and tell the user before you
 make the change. Never say an antidote exists unless you have checked it.
 
-## 1. Assess the toxicity
+## 1. Assess the risk
 
 Ask: Who else sees this? Can one command undo it? Does it destroy data? Does it
 leave this machine (published, sent, deployed)?
 
 | Level | Examples | What you need |
 |---|---|---|
-| **Harmless** | local commits; pushing your own unshared feature branch; opening a draft PR | Nothing. Carry on. |
-| **Toxic** | pushing to or merging into `main`/`develop`/release branches; merging a PR; dependency or lockfile upgrades; CI/workflow changes; config or feature-flag changes; staging deploys | Steps 2, 3 (quick check) and 4. |
-| **Lethal** | force-pushing or rewriting shared history; deleting branches, tags or releases; migrations that drop or rewrite data; production deploys; publishing packages; rotating secrets; changing permissions; infra destroy/replace; bulk data changes | Steps 2–4 with a **rehearsed** antidote, plus the user's explicit go-ahead for this specific change. |
+| **Safe** | local commits; pushing your own unshared feature branch; opening a draft PR | Nothing. Carry on. |
+| **Risky** | pushing to or merging into `main`/`develop`/release branches; merging a PR; dependency or lockfile upgrades; CI/workflow changes; config or feature-flag changes; staging deploys | Steps 2, 3 (quick check) and 4. |
+| **Destructive** | force-pushing or rewriting shared history; deleting branches, tags or releases; migrations that drop or rewrite data; production deploys; publishing packages; rotating secrets; changing permissions; infra destroy/replace; bulk data changes | Steps 2–4 with a **rehearsed** antidote, plus the user's explicit go-ahead for this specific change. |
 
 When unsure, treat it as one level worse.
 
-Some poisons have **no full antidote**: a published package version can never be
+Some changes have **no full antidote**: a published package version can never be
 reused, a sent email or webhook cannot be unsent, a leaked secret stays leaked,
 deleted data without a backup is gone. Say so plainly, offer the best mitigation
 (yank/deprecate, rotate, restore from backup), and get confirmation first.
 
-## 2. Brew the antidote
+## 2. Prepare the antidote
 
 ### Git operations: use the helper
 
@@ -92,7 +92,7 @@ An untested antidote is a guess.
 - **Git:** run `scripts/antidote verify`. It checks every snapshot ref still
   resolves and its objects exist, and warns if the target moved since you
   prepared (if it did, prepare a fresh antidote; the old one is stale).
-- **Lethal git changes:** rehearse the cure in a throwaway clone or
+- **Destructive git changes:** rehearse the cure in a throwaway clone or
   `git worktree` first.
 - **Migrations:** run the down migration (or a restore from the backup) on a
   copy of the data, not just on an empty database.
@@ -109,9 +109,9 @@ antidote PR check in CI may fail the PR while the section is empty.
 
 ```markdown
 ## Antidote
-**Risk:** toxic: merges 14 commits into `main`.
+**Risk:** risky: merges 14 commits into `main`.
 **Before:** `main` was at `abc1234` (pinned as `refs/antidote/20261002-101500-def5678/target`).
-**Symptoms that mean "administer":** CI red on `main`; `/health` not 200 within 5 min.
+**Warning signs:** CI red on `main`; `/health` not 200 within 5 min.
 **Cure:**
     git switch -c antidote/cure origin/main
     git restore --source=abc1234 --staged --worktree -- :/
@@ -119,19 +119,19 @@ antidote PR check in CI may fail the PR while the section is empty.
 **Tested:** `antidote verify` OK; cure rehearsed in a scratch clone.
 ```
 
-## 5. Administer the poison, then watch for symptoms
+## 5. Make the change, then watch for warning signs
 
-Run the risky operation only now. Straight after, check the symptoms you wrote
+Run the risky operation only now. Straight after, check the warning signs you wrote
 down: CI on the new head, the remote is where you expected, smoke tests, error
 rates or logs. Tell the user what you did and where the antidote is.
 
-## 6. If symptoms appear, administer the antidote
+## 6. If it goes wrong, apply the antidote
 
 - Stop making new changes on top.
 - On shared branches prefer **roll forward** (a new commit or revert) over
   rewinding history; rewind only if nobody else could have pulled.
 - Use `--force-with-lease`, never bare `--force`.
-- Ask the user before running a lethal cure, unless they already authorised it.
+- Ask the user before running a destructive cure, unless they already authorised it.
 - Afterwards, report what broke, what you ran, and the current state.
 
 ## Guardrail: the pre-push hook
