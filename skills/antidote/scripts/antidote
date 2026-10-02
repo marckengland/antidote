@@ -11,7 +11,8 @@ set -euo pipefail
 VERSION="0.1.0"
 PROG="antidote"
 DEFAULT_PROTECT="main master trunk develop release/* production prod"
-OPS="push force-push merge rewrite delete-branch"
+DEFAULT_PROTECT_TAG="*"
+OPS="push force-push merge rewrite delete-branch tag"
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 
@@ -31,6 +32,7 @@ Usage:
   $PROG list
   $PROG drop    ID
   $PROG prune   [--keep N]
+  $PROG covers  --op OP [--branch B] (exit 0 if a fresh antidote exists, e.g. before a PR merge)
   $PROG guard   REMOTE [URL]        (run by the pre-push hook; reads refs on stdin)
   $PROG install-hook [--force]
 
@@ -40,6 +42,7 @@ Operations (--op):
   merge          merging something into --target (e.g. a PR into origin/main)
   rewrite        local rebase / reset / amend / filter-repo (optionally then force-pushed)
   delete-branch  deleting --target on the remote
+  tag            creating, moving or deleting the tag --target (REMOTE/TAG) on the remote
 
 prepare snapshots HEAD, the remote target branch and any uncommitted changes
 under refs/antidote/<ID>/, then writes and prints a recipe with the exact undo
@@ -87,12 +90,15 @@ short()   { printf '%s' "${1:0:7}"; }
 
 need_val() { [ "$2" -ge 2 ] || die "$1 needs a value"; }
 
-# Prints the commit the remote branch points at, or nothing if it does not exist.
-# Returns 1 if the remote could not be reached.
+# Full ref name for a recorded target: kind is "branch" (default) or "tag".
+target_ref() { if [ "$1" = tag ]; then printf 'refs/tags/%s' "$2"; else printf 'refs/heads/%s' "$2"; fi; }
+
+# Prints the object the remote ref (e.g. refs/heads/main) points at, or nothing
+# if it does not exist. Returns 1 if the remote could not be reached.
 remote_sha() {
   local out
-  out=$(git ls-remote "$1" "refs/heads/$2" 2>/dev/null) || return 1
-  printf '%s\n' "$out" | awk -v r="refs/heads/$2" '$2 == r { print $1; exit }'
+  out=$(git ls-remote "$1" "$2" 2>/dev/null) || return 1
+  printf '%s\n' "$out" | awk -v r="$2" '$2 == r { print $1; exit }'
 }
 
 # ---------------------------------------------------------------------------
@@ -134,7 +140,7 @@ cmd_prepare() {
     git remote get-url "$remote" >/dev/null 2>&1 || die "unknown remote '$remote'"
   else
     case $op in
-      merge|delete-branch) die "--op $op needs --target REMOTE/BRANCH (the branch being merged into or deleted)" ;;
+      merge|delete-branch|tag) die "--op $op needs --target REMOTE/NAME (the branch or tag being changed)" ;;
     esac
     if [ -n "$branch" ]; then
       remote=$(git config --get "branch.$branch.remote" || true)
@@ -152,17 +158,20 @@ cmd_prepare() {
   fi
 
   # Where is the target right now?
-  local tsha="" tstate=none
+  local kind=branch tref cached tsha="" tstate=none
+  if [ "$op" = tag ]; then kind=tag; fi
+  tref=$(target_ref "$kind" "$tb")
+  if [ "$kind" = tag ]; then cached="refs/tags/$tb"; else cached="refs/remotes/$remote/$tb"; fi
   if [ -n "$remote" ]; then
-    if [ "$fetch" = 1 ] && tsha=$(remote_sha "$remote" "$tb"); then
+    if [ "$fetch" = 1 ] && tsha=$(remote_sha "$remote" "$tref"); then
       tstate=live
     else
       [ "$fetch" = 1 ] && warn "could not reach '$remote'; using last-fetched $remote/$tb, which may be stale"
-      tsha=$(git rev-parse --verify --quiet "refs/remotes/$remote/$tb^{commit}" || true)
+      tsha=$(git rev-parse --verify --quiet "$cached" || true)
       tstate=cached
     fi
     if [ -n "$tsha" ] && ! git cat-file -e "$tsha^{commit}" 2>/dev/null; then
-      git fetch --quiet "$remote" "refs/heads/$tb" 2>/dev/null || true
+      git fetch --quiet "$remote" "$tref" 2>/dev/null || true
       git cat-file -e "$tsha^{commit}" 2>/dev/null \
         || die "cannot fetch $remote/$tb at $tsha, so it cannot be snapshotted; run 'git fetch $remote' and retry"
     fi
@@ -200,6 +209,7 @@ cmd_prepare() {
   rec_set "$id" untracked "$untracked"
   rec_set "$id" remote "$remote"
   rec_set "$id" target "$tb"
+  rec_set "$id" kind "$kind"
   rec_set "$id" targetsha "$tsha"
   rec_set "$id" targetstate "$tstate"
   rec_set "$id" note "$note"
@@ -310,6 +320,21 @@ render_recipe() {
         printf '    git push --force-with-lease=refs/heads/%s %s %s:refs/heads/%s\n' "$tb" "$remote" "$tsha" "$tb"
       fi
       ;;
+    tag)
+      if [ -n "$tsha" ]; then
+        printf '\n### If the tag %s was moved or deleted by mistake\n\n' "$tb"
+        printf 'Put the original tag object back on %s:\n\n' "$remote"
+        printf '    git push --force %s %s:refs/tags/%s\n\n' "$remote" "$tsha" "$tb"
+        printf 'And locally:\n\n'
+        printf '    git update-ref refs/tags/%s %s\n' "$tb" "$tsha"
+      else
+        printf '\n### If the new tag %s should not exist\n\n' "$tb"
+        printf '    git push %s :refs/tags/%s\n' "$remote" "$tb"
+        printf '    git tag -d %s\n' "$tb"
+      fi
+      printf '\nClones that already fetched the tag keep their copy, and anything the tag push\n'
+      printf 'triggered (release builds, package publishing) has already run: check those too.\n'
+      ;;
     delete-branch)
       printf '\n### Restore the deleted branch %s\n\n' "$where"
       printf '    git push %s %s:refs/heads/%s\n\n' "$remote" "$tsha" "$tb"
@@ -415,7 +440,7 @@ cmd_verify() {
   tsha=$(rec_get "$id" targetsha)
   head=$(rec_get "$id" head)
   if [ "$fetch" = 1 ] && [ -n "$remote" ]; then
-    if now=$(remote_sha "$remote" "$tb"); then
+    if now=$(remote_sha "$remote" "$(target_ref "$(rec_get "$id" kind)" "$tb")"); then
       if [ "$now" = "$tsha" ]; then
         printf 'OK    %s/%s unchanged since the antidote was prepared\n' "$remote" "$tb"
       elif [ -n "$now" ] && [ "$now" = "$head" ]; then
@@ -510,11 +535,14 @@ is_protected() {
 }
 
 find_cover() {
-  local b=$1 want=$2 lsha=$3 deleting=$4 id
+  local kind=$1 b=$2 want=$3 lsha=$4 deleting=$5 id rkind
   for id in $(list_ids | sort -r); do
+    rkind=$(rec_get "$id" kind)
+    [ "${rkind:-branch}" = "$kind" ] || continue
     [ "$(rec_get "$id" target)" = "$b" ] || continue
     [ "$(rec_get "$id" targetsha)" = "$want" ] || continue
-    if [ "$deleting" = 1 ] || [ "$(rec_get "$id" head)" = "$lsha" ]; then
+    # A tag antidote saves the old tag, whatever new object is pushed.
+    if [ "$kind" = tag ] || [ "$deleting" = 1 ] || [ "$(rec_get "$id" head)" = "$lsha" ]; then
       printf '%s' "$id"
       return 0
     fi
@@ -529,20 +557,43 @@ cmd_guard() {
     cat >/dev/null
     return 0
   fi
-  local patterns
+  local patterns tag_patterns
   patterns=$(git config --get-all antidote.protect || true)
   [ -n "$patterns" ] || patterns=$DEFAULT_PROTECT
+  tag_patterns=$(git config --get-all antidote.protectTag || true)
+  [ -n "$tag_patterns" ] || tag_patterns=$DEFAULT_PROTECT_TAG
 
   local blocked=0 _lref lsha rref rsha b want deleting id
   while read -r _lref lsha rref rsha; do
-    case ${rref:-} in refs/heads/*) ;; *) continue ;; esac
-    b=${rref#refs/heads/}
+    deleting=0
+    if is_zero "$lsha"; then deleting=1; fi
+    case ${rref:-} in
+      refs/tags/*)
+        # Creating a tag is fine; moving or deleting an existing one needs an antidote.
+        b=${rref#refs/tags/}
+        is_zero "$rsha" && continue
+        is_protected "$b" "$tag_patterns" || continue
+        if id=$(find_cover tag "$b" "$rsha" "$lsha" "$deleting"); then
+          info "change to tag '$b' is covered by antidote $id"
+        else
+          blocked=1
+          {
+            printf '%s: blocked %s of existing tag %s: no antidote prepared for it.\n' \
+              "$PROG" "$([ "$deleting" = 1 ] && echo deletion || echo move)" "$b"
+            printf '  Prepare one, then push again:\n'
+            printf '    %s prepare --op tag --target %s/%s\n' "$SELF" "$remote" "$b"
+            printf '  To skip the check once, with the user'"'"'s approval: ANTIDOTE_SKIP=1 git push ...\n'
+          } >&2
+        fi
+        continue
+        ;;
+      refs/heads/*) b=${rref#refs/heads/} ;;
+      *) continue ;;
+    esac
     is_protected "$b" "$patterns" || continue
     want=$rsha
     if is_zero "$rsha"; then want=""; fi
-    deleting=0
-    if is_zero "$lsha"; then deleting=1; fi
-    if id=$(find_cover "$b" "$want" "$lsha" "$deleting"); then
+    if id=$(find_cover branch "$b" "$want" "$lsha" "$deleting"); then
       info "push to protected branch '$b' is covered by antidote $id"
     else
       blocked=1
@@ -560,6 +611,47 @@ cmd_guard() {
     fi
   done
   [ "$blocked" = 0 ]
+}
+
+# Is there a still-fresh antidote for OP (optionally on BRANCH)? Used for
+# operations that never pass through a local pre-push hook, like server-side
+# PR merges. Fresh means the remote target has not moved since it was prepared.
+cmd_covers() {
+  local op="" b="" fetch=1
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --op)       need_val "$1" $#; op=$2; shift 2 ;;
+      --op=*)     op=${1#*=}; shift ;;
+      --branch)   need_val "$1" $#; b=$2; shift 2 ;;
+      --branch=*) b=${1#*=}; shift ;;
+      --no-fetch) fetch=0; shift ;;
+      *) die "covers: unknown argument: $1" ;;
+    esac
+  done
+  [ -n "$op" ] || die "covers needs --op"
+  local id remote tb tsha now
+  for id in $(list_ids | sort -r); do
+    [ "$(rec_get "$id" op)" = "$op" ] || continue
+    tb=$(rec_get "$id" target)
+    if [ -n "$b" ] && [ "$tb" != "$b" ]; then continue; fi
+    remote=$(rec_get "$id" remote)
+    tsha=$(rec_get "$id" targetsha)
+    if [ "$fetch" = 1 ] && [ -n "$remote" ]; then
+      if ! now=$(remote_sha "$remote" "$(target_ref "$(rec_get "$id" kind)" "$tb")"); then
+        printf '%s: cannot reach %s to check antidote %s\n' "$PROG" "$remote" "$id" >&2
+        return 1
+      fi
+      if [ "$now" != "$tsha" ]; then
+        printf '%s: antidote %s is stale: %s/%s moved from %s to %s since it was prepared\n' \
+          "$PROG" "$id" "$remote" "$tb" "$(short "$tsha")" "$(short "$now")" >&2
+        return 1
+      fi
+    fi
+    printf '%s\n' "$id"
+    return 0
+  done
+  printf '%s: no antidote prepared for --op %s%s\n' "$PROG" "$op" "${b:+ on $b}" >&2
+  return 1
 }
 
 cmd_install_hook() {
@@ -602,6 +694,7 @@ main() {
     drop)         cmd_drop "$@" ;;
     prune)        cmd_prune "$@" ;;
     guard)        cmd_guard "$@" ;;
+    covers)       cmd_covers "$@" ;;
     install-hook) cmd_install_hook "$@" ;;
     *) die "unknown command '$cmd' (see: $PROG --help)" ;;
   esac

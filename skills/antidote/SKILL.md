@@ -47,6 +47,7 @@ right before the risky command:
 <skill-dir>/scripts/antidote prepare --op force-push    --target origin/feature
 <skill-dir>/scripts/antidote prepare --op rewrite                              # before rebase/reset/amend
 <skill-dir>/scripts/antidote prepare --op delete-branch --target origin/old-thing
+<skill-dir>/scripts/antidote prepare --op tag           --target origin/v2.3.0  # create, move or delete a tag
 ```
 
 It asks the remote where the target branch is *right now*, pins that commit,
@@ -58,7 +59,7 @@ offline copy you can move off the machine. `--target` defaults to the current
 branch's upstream; `--head REV` snapshots something other than HEAD.
 
 Other commands: `verify [id]`, `show [id]`, `list`, `drop <id>`, `prune --keep N`,
-`install-hook` (see Guardrail below). Records live in `.git/antidote/` and are
+`covers --op OP [--branch B]`, `install-hook` (see Guardrail below). Records live in `.git/antidote/` and are
 never committed or pushed.
 
 If the helper cannot run, do it by hand and write the recipe yourself:
@@ -98,6 +99,8 @@ An untested antidote is a guess.
 
 Put the antidote where people will look, normally the PR description, or the
 message to the user before you act. Do not commit antidote files into the repo.
+If the repo has a PR template with an `## Antidote` section, fill that in: an
+antidote PR check in CI may fail the PR while the section is empty.
 
 ```markdown
 ## Antidote
@@ -136,5 +139,12 @@ This installs a `pre-push` hook that blocks pushes and deletions on protected
 branches (default `main master trunk develop release/* production prod`;
 change with `git config --add antidote.protect '<glob>'`) unless an antidote
 was prepared for exactly that push: same branch, same remote "before" commit,
-same commit being pushed. Never bypass it (`ANTIDOTE_SKIP=1` or `--no-verify`)
+same commit being pushed. Moving or deleting an existing tag needs an
+`--op tag` antidote (`antidote.protectTag`, default all tags); creating a new
+tag does not. Never bypass it (`ANTIDOTE_SKIP=1` or `--no-verify`)
 without the user's approval.
+
+When this skill is installed as a Claude Code plugin, a hook also checks
+`git push`, `gh pr merge` and MCP `merge_pull_request` calls before they run.
+If it denies one, do what its message says (prepare the antidote, then retry);
+do not try to get around it.
