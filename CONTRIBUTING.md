@@ -8,6 +8,7 @@ Thanks for helping make agents safer to hand the keys to.
 skills/antidote/SKILL.md              instructions the agent follows
 skills/antidote/references/recipes.md per-platform snapshot / cure / test recipes
 skills/antidote/scripts/antidote      the git helper (bash + git, no other deps)
+hooks/                                Claude Code PreToolUse hook (python3, stdlib only)
 tests/test_antidote.sh                end-to-end tests against a real local remote
 .claude-plugin/                       Claude Code plugin + marketplace manifests
 ```
