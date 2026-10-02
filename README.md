@@ -8,22 +8,23 @@ covers pushing to `main`, merging a PR, force-pushing, rewriting history,
 deleting branches, running migrations, deploying, publishing a package, or
 rotating secrets.
 
-When you make a poison, you make sure the antidote is ready first. Agents move
-fast and push confidently; this skill makes them stop for ten seconds and answer
-*"if this goes wrong, what exactly do we run?"*, with real commit hashes and
-tested commands rather than "we can always revert".
+Agents move fast and push confidently. One bad push to `main`, one force-push
+or one dropped table reaches everyone before anyone notices. This skill makes
+the agent stop for ten seconds and answer *"if this goes wrong, what exactly do
+we run?"*, with real commit hashes and tested commands rather than "we can
+always revert".
 
 ## What the agent does
 
-1. **Assess the toxicity.** Harmless, toxic or lethal, decided by who else sees
+1. **Assess the risk.** Safe, risky or destructive, decided by who else sees
    the change, whether one command can undo it, and whether it destroys data.
-2. **Brew the antidote.** Snapshot the state to return to and generate the exact
-   cure commands.
-3. **Test it.** Verify the snapshot and, for lethal changes, rehearse the cure.
+2. **Prepare the antidote.** Snapshot the state to return to and generate the
+   exact undo commands.
+3. **Test it.** Verify the snapshot and, for destructive changes, rehearse the cure.
 4. **Write it down.** An `## Antidote` section in the PR or in its message to you.
-5. **Administer the poison** and watch for the symptoms it defined up front.
-6. **Cure** if symptoms appear: roll forward first, rewind with
-   `--force-with-lease` only when safe, and ask you before anything lethal.
+5. **Make the change** and watch for the warning signs it defined up front.
+6. **Undo it if it goes wrong:** roll forward first, rewind with
+   `--force-with-lease` only when safe, and ask you before anything destructive.
 
 See [`skills/antidote/SKILL.md`](skills/antidote/SKILL.md) for the full
 instructions and [`references/recipes.md`](skills/antidote/references/recipes.md)
