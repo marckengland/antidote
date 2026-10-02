@@ -186,7 +186,8 @@ test_guard_blocks_then_allows() {
   "$ANTIDOTE" install-hook 2>/dev/null
   echo two > a.txt; git commit --quiet -am two
   refute git push --quiet origin main 2>err.txt
-  grep -q 'blocked push to protected branch main' err.txt
+  grep -q "blocked push to protected branch main" err.txt
+  grep -q "and main at [0-9a-f]\{7\}\.)" err.txt
   "$ANTIDOTE" prepare --op push > /dev/null 2>&1
   git push --quiet origin main 2>/dev/null
   # A later commit is not covered by the old antidote.
@@ -245,9 +246,110 @@ test_refuses_outside_repo_and_empty_repo() {
   (cd "$WORK/empty" && refute "$ANTIDOTE" prepare 2>/dev/null)
 }
 
+# --- Claude Code hook (hooks/antidote_guard.py) ------------------------------
+
+HOOK="$ROOT/hooks/antidote_guard.py"
+
+# Feed a tool call to the hook; print allow / ask / deny.
+hook_json() {
+  local out
+  out=$(printf '%s' "$1" | PATH="$WORK/bin:$PATH" python3 "$HOOK")
+  if [ -z "$out" ]; then echo allow; else
+    printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["permissionDecision"])'
+  fi
+}
+hook_bash() {
+  hook_json "$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","cwd":sys.argv[2],"tool_input":{"command":sys.argv[1]}}))' "$1" "${2:-$PWD}")"
+}
+fake_gh() {  # gh that reports base branch $1 for any PR
+  mkdir -p "$WORK/bin"
+  printf '#!/bin/sh\necho %s\n' "$1" > "$WORK/bin/gh"
+  chmod +x "$WORK/bin/gh"
+}
+
+test_hook_denies_unprotected_push_to_main_without_pushing() {
+  echo two > a.txt; git commit --quiet -am two
+  local before; before=$(remote_main)
+  [ "$(hook_bash 'git push origin main')" = deny ]
+  [ "$(hook_bash 'git push')" = deny ]
+  [ "$(remote_main)" = "$before" ]   # the dry run pushed nothing
+}
+
+test_hook_allows_after_prepare() {
+  echo two > a.txt; git commit --quiet -am two
+  "$ANTIDOTE" prepare --op push > /dev/null 2>&1
+  [ "$(hook_bash 'git push origin main')" = allow ]
+}
+
+test_hook_allows_feature_branch_and_strips_set_upstream() {
+  git switch --quiet -c feature
+  [ "$(hook_bash 'git push -u origin feature')" = allow ]
+  [ -z "$(git config --get branch.feature.remote || true)" ]
+  [ -z "$(git ls-remote origin refs/heads/feature)" ]
+}
+
+test_hook_asks_on_bypass() {
+  echo two > a.txt; git commit --quiet -am two
+  [ "$(hook_bash 'git push --no-verify origin main')" = ask ]
+  [ "$(hook_bash 'ANTIDOTE_SKIP=1 git push origin main')" = ask ]
+  [ "$(hook_bash 'git -c core.hooksPath=/dev/null push origin main')" = ask ]
+}
+
+test_hook_follows_cd_and_git_C() {
+  echo two > a.txt; git commit --quiet -am two
+  [ "$(hook_bash "cd $WORK/repo && git push origin main" "$WORK")" = deny ]
+  [ "$(hook_bash "git -C $WORK/repo push origin main" "$WORK")" = deny ]
+  [ "$(hook_bash "git status; echo ok" "$WORK")" = allow ]
+}
+
+test_hook_can_be_disabled_per_repo() {
+  echo two > a.txt; git commit --quiet -am two
+  git config antidote.enabled false
+  [ "$(hook_bash 'git push origin main')" = allow ]
+}
+
+test_hook_gh_pr_merge() {
+  fake_gh main
+  [ "$(hook_bash 'gh pr merge 7 --squash')" = deny ]
+  "$ANTIDOTE" prepare --op merge --target origin/main > /dev/null 2>&1
+  [ "$(hook_bash 'gh pr merge 7 --squash')" = allow ]
+  # Stale once main moves.
+  git clone --quiet "$WORK/remote.git" "$WORK/other" 2>/dev/null
+  (cd "$WORK/other" && echo x > x.txt && git add x.txt && git commit --quiet -m x && git push --quiet origin main 2>/dev/null)
+  [ "$(hook_bash 'gh pr merge 7 --squash')" = deny ]
+}
+
+test_hook_gh_pr_merge_checks_base_branch() {
+  git push --quiet origin main:develop 2>/dev/null
+  fake_gh develop
+  "$ANTIDOTE" prepare --op merge --target origin/main > /dev/null 2>&1
+  [ "$(hook_bash 'gh pr merge 7')" = deny ]
+  "$ANTIDOTE" prepare --op merge --target origin/develop > /dev/null 2>&1
+  [ "$(hook_bash 'gh pr merge 7')" = allow ]
+}
+
+test_hook_mcp_merge_tool() {
+  fake_gh main
+  local call
+  call=$(printf '{"tool_name":"mcp__github__merge_pull_request","cwd":"%s","tool_input":{"owner":"o","repo":"r","pullNumber":7}}' "$PWD")
+  [ "$(hook_json "$call")" = deny ]
+  "$ANTIDOTE" prepare --op merge --target origin/main > /dev/null 2>&1
+  [ "$(hook_json "$call")" = allow ]
+}
+
+test_hook_ignores_unparseable_and_other_tools() {
+  [ "$(hook_bash 'echo "unbalanced')" = allow ]
+  [ "$(hook_json '{"tool_name":"Read","tool_input":{"file_path":"x"}}')" = allow ]
+  [ "$(hook_json 'not json')" = allow ]
+}
+
 # ---------------------------------------------------------------------------
 
 tests=$(declare -F | awk '{print $3}' | grep '^test_')
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 not found: skipping Claude Code hook tests"
+  tests=$(printf '%s\n' "$tests" | grep -v '^test_hook_')
+fi
 if [ $# -gt 0 ]; then tests="$*"; fi
 for t in $tests; do run "$t"; done
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
