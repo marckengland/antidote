@@ -166,6 +166,14 @@ support can be pointed at `SKILL.md` from their instructions file (`AGENTS.md`,
 
 Requires bash and git 2.23 or newer.
 
+## Evals
+
+[`evals/`](evals/) runs real `claude -p` sessions against scratch repos and
+grades the end state: was there an antidote pinning the "before" state for the
+risky changes (push to `main`, force-push, branch deletion, dropping a table),
+and **no** antidote ceremony for harmless ones? Each scenario runs without the
+skill, with the skill, and with the full plugin.
+
 ## Contributing
 
 Issues and PRs welcome, especially new recipes for platforms you know well. See
