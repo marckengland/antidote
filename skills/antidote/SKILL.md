@@ -80,6 +80,11 @@ The antidote must not depend on the thing you are about to break: no backups
 only on the disk being wiped, no rollback that needs the service being replaced,
 no snapshot stored only in the branch being force-pushed.
 
+The antidote must also **outlive your session**. Keep backups next to the data
+they protect (e.g. `app.db.before-drop-legacy`, kept out of git), or wherever
+the user says, never only in a temp, scratchpad or sandbox directory that gets
+cleaned up. Tell the user the exact path.
+
 ## 3. Test the antidote
 
 An untested antidote is a guess.
