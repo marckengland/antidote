@@ -1,0 +1,609 @@
+#!/usr/bin/env bash
+# antidote: snapshot git state before a risky operation and write down the exact
+# commands that undo it, so the cure exists before the poison is administered.
+#
+# https://github.com/marckengland/antidote (MIT License)
+#
+# shellcheck disable=SC2016 # backticks in printf formats are Markdown, not command substitution
+
+set -euo pipefail
+
+VERSION="0.1.0"
+PROG="antidote"
+DEFAULT_PROTECT="main master trunk develop release/* production prod"
+OPS="push force-push merge rewrite delete-branch"
+
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+
+die()  { printf '%s: error: %s\n' "$PROG" "$*" >&2; exit 1; }
+warn() { printf '%s: warning: %s\n' "$PROG" "$*" >&2; }
+info() { printf '%s: %s\n' "$PROG" "$*" >&2; }
+
+usage() {
+  cat <<EOF
+$PROG $VERSION: prepare an antidote before a risky git operation.
+
+Usage:
+  $PROG prepare [--op OP] [--target REMOTE/BRANCH] [--head REV] [--note TEXT]
+                [--no-fetch] [--bundle]
+  $PROG verify  [ID] [--no-fetch]
+  $PROG show    [ID]
+  $PROG list
+  $PROG drop    ID
+  $PROG prune   [--keep N]
+  $PROG guard   REMOTE [URL]        (run by the pre-push hook; reads refs on stdin)
+  $PROG install-hook [--force]
+
+Operations (--op):
+  push           fast-forward push or PR merge you are about to make (default)
+  force-push     push that rewrites the remote branch
+  merge          merging something into --target (e.g. a PR into origin/main)
+  rewrite        local rebase / reset / amend / filter-repo (optionally then force-pushed)
+  delete-branch  deleting --target on the remote
+
+prepare snapshots HEAD, the remote target branch and any uncommitted changes
+under refs/antidote/<ID>/, then writes and prints a recipe with the exact undo
+commands. Records live in .git/antidote/ and are never committed or pushed.
+
+ID defaults to the most recent antidote.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# storage
+
+store_dir() {
+  local common
+  common=$(git rev-parse --git-common-dir 2>/dev/null) || die "not inside a git repository"
+  printf '%s/antidote' "$(cd "$common" && pwd -P)"
+}
+
+rec_file() { printf '%s/%s.rec' "$STORE" "$1"; }
+rec_get()  { git config -f "$(rec_file "$1")" --get "antidote.$2" 2>/dev/null || true; }
+rec_set()  { git config -f "$(rec_file "$1")" "antidote.$2" "$3"; }
+
+list_ids() {
+  [ -d "$STORE" ] || return 0
+  local f
+  for f in "$STORE"/*.rec; do
+    [ -e "$f" ] || continue
+    f=${f##*/}
+    printf '%s\n' "${f%.rec}"
+  done | sort
+}
+
+resolve_id() {
+  local id=${1:-}
+  if [ -z "$id" ] || [ "$id" = latest ]; then
+    id=$(list_ids | tail -n 1)
+    [ -n "$id" ] || die "no antidotes prepared in this repository yet (run: $PROG prepare)"
+  fi
+  [ -e "$(rec_file "$id")" ] || die "no antidote with id '$id' (see: $PROG list)"
+  printf '%s' "$id"
+}
+
+is_zero() { case $1 in *[!0]*) return 1 ;; *) return 0 ;; esac; }
+short()   { printf '%s' "${1:0:7}"; }
+
+need_val() { [ "$2" -ge 2 ] || die "$1 needs a value"; }
+
+# Prints the commit the remote branch points at, or nothing if it does not exist.
+# Returns 1 if the remote could not be reached.
+remote_sha() {
+  local out
+  out=$(git ls-remote "$1" "refs/heads/$2" 2>/dev/null) || return 1
+  printf '%s\n' "$out" | awk -v r="refs/heads/$2" '$2 == r { print $1; exit }'
+}
+
+# ---------------------------------------------------------------------------
+# prepare
+
+cmd_prepare() {
+  local op=push target="" headrev=HEAD note="" fetch=1 bundle=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --op)       need_val "$1" $#; op=$2; shift 2 ;;
+      --op=*)     op=${1#*=}; shift ;;
+      --target)   need_val "$1" $#; target=$2; shift 2 ;;
+      --target=*) target=${1#*=}; shift ;;
+      --head)     need_val "$1" $#; headrev=$2; shift 2 ;;
+      --head=*)   headrev=${1#*=}; shift ;;
+      --note)     need_val "$1" $#; note=$2; shift 2 ;;
+      --note=*)   note=${1#*=}; shift ;;
+      --no-fetch) fetch=0; shift ;;
+      --bundle)   bundle=1; shift ;;
+      -h|--help)  usage; return 0 ;;
+      *) die "prepare: unknown argument: $1" ;;
+    esac
+  done
+  case " $OPS " in *" $op "*) ;; *) die "unknown --op '$op' (one of: $OPS)" ;; esac
+
+  local head branch
+  head=$(git rev-parse --verify --quiet "$headrev^{commit}") \
+    || die "'$headrev' is not a commit (an empty repository has nothing to protect yet)"
+  branch=$(git symbolic-ref --quiet --short HEAD || true)
+
+  # Which remote branch is about to be changed?
+  local remote="" tb=""
+  if [ -n "$target" ]; then
+    remote=${target%%/*}
+    tb=${target#*/}
+    if [ "$remote" = "$target" ] || [ -z "$tb" ]; then
+      die "--target must look like REMOTE/BRANCH, e.g. origin/main"
+    fi
+    git remote get-url "$remote" >/dev/null 2>&1 || die "unknown remote '$remote'"
+  else
+    case $op in
+      merge|delete-branch) die "--op $op needs --target REMOTE/BRANCH (the branch being merged into or deleted)" ;;
+    esac
+    if [ -n "$branch" ]; then
+      remote=$(git config --get "branch.$branch.remote" || true)
+      tb=$(git config --get "branch.$branch.merge" || true)
+      tb=${tb#refs/heads/}
+      if [ "$remote" = . ] || [ -z "$tb" ]; then remote=""; tb=""; fi
+      if [ -z "$remote" ] && git remote get-url origin >/dev/null 2>&1; then
+        remote=origin
+        tb=$branch
+      fi
+    fi
+    if [ -z "$remote" ] && [ "$op" != rewrite ]; then
+      warn "no remote target found; only local state will be snapshotted (use --target REMOTE/BRANCH)"
+    fi
+  fi
+
+  # Where is the target right now?
+  local tsha="" tstate=none
+  if [ -n "$remote" ]; then
+    if [ "$fetch" = 1 ] && tsha=$(remote_sha "$remote" "$tb"); then
+      tstate=live
+    else
+      [ "$fetch" = 1 ] && warn "could not reach '$remote'; using last-fetched $remote/$tb, which may be stale"
+      tsha=$(git rev-parse --verify --quiet "refs/remotes/$remote/$tb^{commit}" || true)
+      tstate=cached
+    fi
+    if [ -n "$tsha" ] && ! git cat-file -e "$tsha^{commit}" 2>/dev/null; then
+      git fetch --quiet "$remote" "refs/heads/$tb" 2>/dev/null || true
+      git cat-file -e "$tsha^{commit}" 2>/dev/null \
+        || die "cannot fetch $remote/$tb at $tsha, so it cannot be snapshotted; run 'git fetch $remote' and retry"
+    fi
+    if [ -z "$tsha" ]; then
+      case $op in
+        merge|delete-branch) die "$remote/$tb does not exist; nothing to $op" ;;
+      esac
+    fi
+  fi
+
+  # Uncommitted work (tracked files only; git stash create touches nothing).
+  local wt untracked
+  wt=$(git stash create 2>/dev/null || true)
+  untracked=$(git ls-files --others --exclude-standard | wc -l | tr -d ' ')
+
+  STORE=$(store_dir)
+  mkdir -p "$STORE"
+  local base id n=1
+  base="$(date -u +%Y%m%d-%H%M%S)-$(short "$head")"
+  id=$base
+  while [ -e "$(rec_file "$id")" ]; do n=$((n + 1)); id="$base-$n"; done
+
+  local R="refs/antidote/$id"
+  git update-ref -m "antidote $id" "$R/head" "$head"
+  if [ -n "$tsha" ]; then git update-ref -m "antidote $id" "$R/target" "$tsha"; fi
+  if [ -n "$wt" ]; then git update-ref -m "antidote $id" "$R/worktree" "$wt"; fi
+
+  rec_set "$id" id "$id"
+  rec_set "$id" op "$op"
+  rec_set "$id" created "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  rec_set "$id" repo "$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+  rec_set "$id" branch "$branch"
+  rec_set "$id" head "$head"
+  rec_set "$id" worktree "$wt"
+  rec_set "$id" untracked "$untracked"
+  rec_set "$id" remote "$remote"
+  rec_set "$id" target "$tb"
+  rec_set "$id" targetsha "$tsha"
+  rec_set "$id" targetstate "$tstate"
+  rec_set "$id" note "$note"
+
+  if [ "$bundle" = 1 ]; then
+    local out refs="$R/head"
+    if [ -n "$tsha" ]; then refs="$refs $R/target"; fi
+    if [ -n "$wt" ]; then refs="$refs $R/worktree"; fi
+    # shellcheck disable=SC2086 # $refs is a list of ref names without spaces
+    out=$(git bundle create "$STORE/$id.bundle" $refs 2>&1) || die "bundle failed: $out"
+    rec_set "$id" bundle "$STORE/$id.bundle"
+  fi
+
+  render_recipe "$id" > "$STORE/$id.md"
+  cat "$STORE/$id.md"
+  info "antidote $id ready (recipe saved to $STORE/$id.md)"
+  if [ "$untracked" != 0 ]; then
+    warn "$untracked untracked file(s) are NOT in the snapshot; commit or copy them if they matter"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# recipe
+
+render_recipe() {
+  local id=$1
+  local op created repo branch head wt untracked remote tb tsha tstate note bundle
+  op=$(rec_get "$id" op)
+  created=$(rec_get "$id" created)
+  repo=$(rec_get "$id" repo)
+  branch=$(rec_get "$id" branch)
+  head=$(rec_get "$id" head)
+  wt=$(rec_get "$id" worktree)
+  untracked=$(rec_get "$id" untracked)
+  remote=$(rec_get "$id" remote)
+  tb=$(rec_get "$id" target)
+  tsha=$(rec_get "$id" targetsha)
+  tstate=$(rec_get "$id" targetstate)
+  note=$(rec_get "$id" note)
+  bundle=$(rec_get "$id" bundle)
+  local R="refs/antidote/$id"
+  local where="${remote:+$remote/}$tb"
+
+  printf '# Antidote %s\n\n' "$id"
+  printf -- '- Operation: %s\n- Created: %s\n- Repository: %s\n' "$op" "$created" "$repo"
+  if [ -n "$note" ]; then printf -- '- Note: %s\n' "$note"; fi
+
+  printf '\n## Snapshot\n\n'
+  printf '| What | Commit | Kept alive by |\n|---|---|---|\n'
+  printf '| HEAD%s | `%s` | `%s/head` |\n' "${branch:+ ($branch)}" "$head" "$R"
+  if [ -n "$tsha" ]; then
+    printf '| %s before | `%s` | `%s/target` |\n' "$where" "$tsha" "$R"
+  elif [ -n "$remote" ]; then
+    printf '| %s before | (branch did not exist) | - |\n' "$where"
+  fi
+  if [ -n "$wt" ]; then
+    printf '| Uncommitted changes | `%s` | `%s/worktree` |\n' "$wt" "$R"
+  fi
+  if [ -n "$bundle" ]; then
+    printf '| Offline copy | `%s` | file |\n' "$bundle"
+  fi
+  if [ "$tstate" = cached ]; then
+    printf '\n> Warning: %s could not be reached; the "before" state is the last fetched one and may be stale.\n' "$remote"
+  fi
+  if [ "${untracked:-0}" != 0 ]; then
+    printf '\n> Warning: %s untracked file(s) are not part of this snapshot.\n' "$untracked"
+  fi
+
+  printf '\n## Cure\n'
+
+  case $op in
+    push|merge)
+      if [ -n "$tsha" ]; then
+        recipe_rollforward "$id" "$remote" "$tb" "$tsha" "$op"
+        recipe_rewind "$remote" "$tb" "$tsha" "$head" "$op"
+      elif [ -n "$remote" ]; then
+        printf '\n### If the new branch %s should not exist\n\n' "$where"
+        printf 'Delete it again (refuses if someone pushed to it after you):\n\n'
+        printf '    git push --force-with-lease=refs/heads/%s:%s %s :refs/heads/%s\n' "$tb" "$head" "$remote" "$tb"
+      else
+        printf '\nNo remote target was recorded. Restore local state with:\n\n'
+        printf '    git branch antidote/cure-%s %s\n' "$id" "$head"
+      fi
+      ;;
+    force-push)
+      printf '\n### If the force-push lost work or broke %s\n\n' "$where"
+      if [ -n "$tsha" ]; then
+        printf 'Commits that were on %s and are not in what you pushed:\n\n' "$where"
+        printf '    git log --oneline %s..%s\n\n' "$head" "$tsha"
+        printf 'Put the branch back exactly as it was (refuses if someone pushed after you):\n\n'
+        printf '    git push --force-with-lease=refs/heads/%s:%s %s %s:refs/heads/%s\n\n' "$tb" "$head" "$remote" "$tsha" "$tb"
+        printf 'If you pushed a commit other than `%s`, put that commit after the colon in `--force-with-lease`.\n' "$(short "$head")"
+      elif [ -n "$remote" ]; then
+        printf '%s did not exist before; delete it again:\n\n' "$where"
+        printf '    git push --force-with-lease=refs/heads/%s:%s %s :refs/heads/%s\n' "$tb" "$head" "$remote" "$tb"
+      fi
+      ;;
+    rewrite)
+      printf '\n### If the rewrite (rebase / reset / amend / filter) went wrong\n\n'
+      printf 'Get the old history back as a new branch (safe, touches nothing else):\n\n'
+      printf '    git branch antidote/cure-%s %s\n\n' "$id" "$head"
+      printf 'Or put the branch back exactly as it was (discards the rewrite; check `git status` first):\n\n'
+      if [ -n "$branch" ]; then printf '    git switch %s\n' "$branch"; fi
+      printf '    git reset --hard %s\n' "$head"
+      if [ -n "$tsha" ]; then
+        printf '\n### If you already force-pushed the rewrite to %s\n\n' "$where"
+        printf '    git fetch %s\n' "$remote"
+        printf '    git push --force-with-lease=refs/heads/%s %s %s:refs/heads/%s\n' "$tb" "$remote" "$tsha" "$tb"
+      fi
+      ;;
+    delete-branch)
+      printf '\n### Restore the deleted branch %s\n\n' "$where"
+      printf '    git push %s %s:refs/heads/%s\n\n' "$remote" "$tsha" "$tb"
+      printf 'And locally, if it was deleted there too:\n\n'
+      printf '    git branch %s %s\n' "$tb" "$tsha"
+      ;;
+  esac
+
+  if [ -n "$wt" ]; then
+    printf '\n### Get uncommitted changes back\n\n'
+    printf '    git stash apply %s\n' "$wt"
+  fi
+
+  printf '\n## Check that the antidote is still good\n\n'
+  printf '    %s verify %s\n' "$PROG" "$id"
+}
+
+recipe_rollforward() {
+  local id=$1 remote=$2 tb=$3 tsha=$4 op=$5
+  printf '\n### Option A: roll forward (safe on shared branches, keeps history)\n\n'
+  printf 'First look at what landed after the snapshot:\n\n'
+  printf '    git fetch %s\n' "$remote"
+  printf '    git log --oneline %s..%s/%s\n\n' "$tsha" "$remote" "$tb"
+  if [ "$op" = merge ]; then
+    printf 'If only your merge landed, revert just that commit (or use the "Revert" button on the merged PR):\n\n'
+    printf '    git revert -m 1 <merge-commit>      # merge commit\n'
+    printf '    git revert <squash-commit>          # squash merge\n\n'
+    printf 'To restore the tree exactly as it was before (this also undoes anything else listed above):\n\n'
+  else
+    printf 'Make one new commit that restores the tree exactly as it was before (this also undoes anything else listed above):\n\n'
+  fi
+  printf '    git switch -c antidote/cure-%s %s/%s\n' "$id" "$remote" "$tb"
+  printf '    git restore --source=%s --staged --worktree -- :/\n' "$tsha"
+  printf '    git commit -m "Restore %s to %s (antidote %s)"\n' "$tb" "$(short "$tsha")" "$id"
+  printf '    git push %s HEAD:%s\n\n' "$remote" "$tb"
+  printf 'If %s is protected, push `antidote/cure-%s` instead and open a PR from it.\n' "$tb" "$id"
+}
+
+recipe_rewind() {
+  local remote=$1 tb=$2 tsha=$3 head=$4 op=$5 expect
+  printf '\n### Option B: rewind (only if nobody else has pulled %s/%s since)\n\n' "$remote" "$tb"
+  printf 'Moves the branch back to the snapshot and refuses if anyone pushed on top of you:\n\n'
+  if [ "$op" = merge ]; then
+    expect="<merge-commit>"
+  else
+    expect=$head
+  fi
+  printf '    git push --force-with-lease=refs/heads/%s:%s %s %s:refs/heads/%s\n' "$tb" "$expect" "$remote" "$tsha" "$tb"
+  if [ "$op" = merge ]; then
+    printf '\n`<merge-commit>` is the tip of %s/%s right after the merge (top of the `git log` above).\n' "$remote" "$tb"
+  else
+    printf '\nIf you pushed a commit other than `%s`, put that commit after the colon in `--force-with-lease`.\n' "$(short "$head")"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# verify / show / list / drop / prune
+
+cmd_verify() {
+  local id="" fetch=1
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --no-fetch) fetch=0; shift ;;
+      -*) die "verify: unknown argument: $1" ;;
+      *) id=$1; shift ;;
+    esac
+  done
+  id=$(resolve_id "$id")
+  local ok=1 key sha actual
+  for key in head target worktree; do
+    case $key in
+      head) sha=$(rec_get "$id" head) ;;
+      target) sha=$(rec_get "$id" targetsha) ;;
+      worktree) sha=$(rec_get "$id" worktree) ;;
+    esac
+    [ -n "$sha" ] || continue
+    actual=$(git rev-parse --verify --quiet "refs/antidote/$id/$key" || true)
+    if [ "$actual" != "$sha" ]; then
+      printf 'FAIL  refs/antidote/%s/%s is %s, expected %s\n' "$id" "$key" "${actual:-missing}" "$sha"
+      ok=0
+    elif ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+      printf 'FAIL  commit %s for %s is missing from the object store\n' "$sha" "$key"
+      ok=0
+    else
+      printf 'OK    %-8s %s\n' "$key" "$sha"
+    fi
+  done
+
+  local bundle
+  bundle=$(rec_get "$id" bundle)
+  if [ -n "$bundle" ]; then
+    if git bundle verify "$bundle" >/dev/null 2>&1; then
+      printf 'OK    bundle   %s\n' "$bundle"
+    else
+      printf 'FAIL  bundle   %s does not verify\n' "$bundle"
+      ok=0
+    fi
+  fi
+
+  local remote tb tsha head now
+  remote=$(rec_get "$id" remote)
+  tb=$(rec_get "$id" target)
+  tsha=$(rec_get "$id" targetsha)
+  head=$(rec_get "$id" head)
+  if [ "$fetch" = 1 ] && [ -n "$remote" ]; then
+    if now=$(remote_sha "$remote" "$tb"); then
+      if [ "$now" = "$tsha" ]; then
+        printf 'OK    %s/%s unchanged since the antidote was prepared\n' "$remote" "$tb"
+      elif [ -n "$now" ] && [ "$now" = "$head" ]; then
+        printf 'INFO  %s/%s now points at the snapshotted HEAD (the operation appears done)\n' "$remote" "$tb"
+      else
+        printf 'WARN  %s/%s moved since the antidote was prepared (was %s, now %s);\n' \
+          "$remote" "$tb" "${tsha:-absent}" "${now:-absent}"
+        printf '      if you have not run the operation yet, prepare a fresh antidote\n'
+      fi
+    else
+      printf 'WARN  could not reach %s to check whether %s moved\n' "$remote" "$tb"
+    fi
+  fi
+
+  if [ "$ok" = 1 ]; then
+    printf 'antidote %s is ready\n' "$id"
+  else
+    printf 'antidote %s is NOT usable\n' "$id"
+    return 1
+  fi
+}
+
+cmd_show() {
+  local id
+  id=$(resolve_id "${1:-}")
+  if [ -e "$STORE/$id.md" ]; then cat "$STORE/$id.md"; else render_recipe "$id"; fi
+}
+
+cmd_list() {
+  local ids id
+  ids=$(list_ids)
+  if [ -z "$ids" ]; then info "no antidotes prepared in this repository yet"; return 0; fi
+  printf '%-30s %-13s %-28s %s\n' ID OP TARGET NOTE
+  for id in $ids; do
+    local remote tb
+    remote=$(rec_get "$id" remote)
+    tb=$(rec_get "$id" target)
+    printf '%-30s %-13s %-28s %s\n' "$id" "$(rec_get "$id" op)" "${remote:+$remote/}${tb:--}" "$(rec_get "$id" note)"
+  done
+}
+
+drop_id() {
+  local id=$1 ref
+  for ref in $(git for-each-ref --format='%(refname)' "refs/antidote/$id/"); do
+    git update-ref -d "$ref"
+  done
+  rm -f "$STORE/$id.rec" "$STORE/$id.md" "$STORE/$id.bundle"
+}
+
+cmd_drop() {
+  [ $# -ge 1 ] && [ -n "$1" ] || die "drop needs an ID (see: $PROG list)"
+  local id
+  id=$(resolve_id "$1")
+  drop_id "$id"
+  info "dropped antidote $id"
+}
+
+cmd_prune() {
+  local keep=20
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --keep)   need_val "$1" $#; keep=$2; shift 2 ;;
+      --keep=*) keep=${1#*=}; shift ;;
+      *) die "prune: unknown argument: $1" ;;
+    esac
+  done
+  case $keep in ''|*[!0-9]*) die "--keep needs a number" ;; esac
+  local ids total drop id dropped=0
+  ids=$(list_ids)
+  total=$(printf '%s' "$ids" | grep -c . || true)
+  drop=$((total - keep))
+  [ "$drop" -gt 0 ] || { info "nothing to prune ($total antidote(s), keeping $keep)"; return 0; }
+  for id in $(printf '%s\n' "$ids" | head -n "$drop"); do
+    drop_id "$id"
+    dropped=$((dropped + 1))
+  done
+  info "pruned $dropped antidote(s), kept $keep"
+}
+
+# ---------------------------------------------------------------------------
+# guard (pre-push hook)
+
+is_protected() {
+  local b=$1 patterns=$2 p
+  set -f
+  for p in $patterns; do
+    # shellcheck disable=SC2254 # $p is a glob pattern on purpose
+    case $b in $p) set +f; return 0 ;; esac
+  done
+  set +f
+  return 1
+}
+
+find_cover() {
+  local b=$1 want=$2 lsha=$3 deleting=$4 id
+  for id in $(list_ids | sort -r); do
+    [ "$(rec_get "$id" target)" = "$b" ] || continue
+    [ "$(rec_get "$id" targetsha)" = "$want" ] || continue
+    if [ "$deleting" = 1 ] || [ "$(rec_get "$id" head)" = "$lsha" ]; then
+      printf '%s' "$id"
+      return 0
+    fi
+  done
+  return 1
+}
+
+cmd_guard() {
+  local remote=${1:-origin}
+  if [ "${ANTIDOTE_SKIP:-}" = 1 ]; then
+    warn "ANTIDOTE_SKIP=1 set; pushing without checking for an antidote"
+    cat >/dev/null
+    return 0
+  fi
+  local patterns
+  patterns=$(git config --get-all antidote.protect || true)
+  [ -n "$patterns" ] || patterns=$DEFAULT_PROTECT
+
+  local blocked=0 _lref lsha rref rsha b want deleting id
+  while read -r _lref lsha rref rsha; do
+    case ${rref:-} in refs/heads/*) ;; *) continue ;; esac
+    b=${rref#refs/heads/}
+    is_protected "$b" "$patterns" || continue
+    want=$rsha
+    if is_zero "$rsha"; then want=""; fi
+    deleting=0
+    if is_zero "$lsha"; then deleting=1; fi
+    if id=$(find_cover "$b" "$want" "$lsha" "$deleting"); then
+      info "push to protected branch '$b' is covered by antidote $id"
+    else
+      blocked=1
+      {
+        printf '%s: blocked push to protected branch %s: no antidote prepared for it.\n' "$PROG" "$b"
+        printf '  Prepare one, then push again:\n'
+        printf '    %s prepare --op <push|force-push|merge|delete-branch> --target %s/%s\n' "$SELF" "$remote" "$b"
+        if [ "$deleting" = 0 ]; then
+          printf '  (It must be prepared with HEAD, or --head, at %s and %s at %s.)\n' \
+            "$(short "$lsha")" "$b" "${want:+$(short "$want")}${want:-nothing}"
+        fi
+        printf '  To skip the check once, with the user'"'"'s approval: ANTIDOTE_SKIP=1 git push ...\n'
+      } >&2
+    fi
+  done
+  [ "$blocked" = 0 ]
+}
+
+cmd_install_hook() {
+  local force=0
+  case ${1:-} in --force) force=1 ;; '') ;; *) die "install-hook: unknown argument: $1" ;; esac
+  local dir hook
+  dir=$(git rev-parse --git-path hooks)
+  hook="$dir/pre-push"
+  if [ -e "$hook" ] && [ "$force" = 0 ]; then
+    die "$hook already exists; merge this into it by hand, or rerun with --force to replace it:
+    exec \"$SELF\" guard \"\$@\""
+  fi
+  mkdir -p "$dir"
+  cat > "$hook" <<EOF
+#!/bin/sh
+# Installed by antidote: block pushes to protected branches until an antidote is prepared.
+# Protected branches: git config --add antidote.protect '<glob>' (default: $DEFAULT_PROTECT)
+exec "$SELF" guard "\$@"
+EOF
+  chmod +x "$hook"
+  info "installed $hook"
+}
+
+# ---------------------------------------------------------------------------
+
+main() {
+  local cmd=${1:-}
+  [ $# -gt 0 ] && shift
+  case $cmd in
+    ''|-h|--help|help) usage; return 0 ;;
+    -V|--version|version) printf '%s %s\n' "$PROG" "$VERSION"; return 0 ;;
+  esac
+  git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
+  STORE=$(store_dir)
+  case $cmd in
+    prepare)      cmd_prepare "$@" ;;
+    verify)       cmd_verify "$@" ;;
+    show)         cmd_show "$@" ;;
+    list|ls)      cmd_list ;;
+    drop)         cmd_drop "$@" ;;
+    prune)        cmd_prune "$@" ;;
+    guard)        cmd_guard "$@" ;;
+    install-hook) cmd_install_hook "$@" ;;
+    *) die "unknown command '$cmd' (see: $PROG --help)" ;;
+  esac
+}
+
+main "$@"
