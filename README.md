@@ -53,7 +53,7 @@ $ antidote prepare --op push --target origin/main --note "release 2.3"
 
 | Command | What it does |
 |---|---|
-| `prepare --op OP [--target R/B] [--head REV] [--note T] [--bundle] [--no-fetch]` | Ask the remote where the target is now, pin it plus HEAD and uncommitted work under `refs/antidote/<id>/`, print the cure. `OP` is `push` (default), `merge`, `force-push`, `rewrite` or `delete-branch`. |
+| `prepare --op OP [--target R/B] [--head REV] [--note T] [--bundle] [--no-fetch]` | Ask the remote where the target is now, pin it plus HEAD and uncommitted work under `refs/antidote/<id>/`, print the cure. `OP` is `push` (default), `merge`, `force-push`, `rewrite`, `delete-branch` or `tag` (create, move or delete the tag `R/TAG`). |
 | `verify [id]` | Check the snapshot still resolves, the bundle (if any) is valid, and whether the remote moved since. Non-zero exit if unusable. |
 | `show [id]` / `list` | Print a recipe / list antidotes. |
 | `drop <id>` / `prune [--keep N]` | Remove antidotes and their refs. |
@@ -74,8 +74,14 @@ git config --add antidote.protect 'hotfix/*'   # optional; defaults: main master
 
 A push or deletion on a protected branch is refused unless an antidote was
 prepared for exactly that push: same branch, same "before" commit on the
-remote, same commit being pushed. Prepare again after new commits. Skip once
-with `ANTIDOTE_SKIP=1 git push ...`.
+remote, same commit being pushed. Prepare again after new commits.
+
+Tags: creating a new tag is always allowed, but **moving or deleting an
+existing tag** needs an `--op tag` antidote (release pipelines and everyone's
+clones depend on tags not moving). Limit which tags this applies to with
+`git config --add antidote.protectTag 'v*'` (default: all tags).
+
+Skip once with `ANTIDOTE_SKIP=1 git push ...`.
 
 ### The Claude Code hook
 

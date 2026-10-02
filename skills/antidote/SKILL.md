@@ -47,6 +47,7 @@ right before the risky command:
 <skill-dir>/scripts/antidote prepare --op force-push    --target origin/feature
 <skill-dir>/scripts/antidote prepare --op rewrite                              # before rebase/reset/amend
 <skill-dir>/scripts/antidote prepare --op delete-branch --target origin/old-thing
+<skill-dir>/scripts/antidote prepare --op tag           --target origin/v2.3.0  # create, move or delete a tag
 ```
 
 It asks the remote where the target branch is *right now*, pins that commit,
@@ -136,7 +137,9 @@ This installs a `pre-push` hook that blocks pushes and deletions on protected
 branches (default `main master trunk develop release/* production prod`;
 change with `git config --add antidote.protect '<glob>'`) unless an antidote
 was prepared for exactly that push: same branch, same remote "before" commit,
-same commit being pushed. Never bypass it (`ANTIDOTE_SKIP=1` or `--no-verify`)
+same commit being pushed. Moving or deleting an existing tag needs an
+`--op tag` antidote (`antidote.protectTag`, default all tags); creating a new
+tag does not. Never bypass it (`ANTIDOTE_SKIP=1` or `--no-verify`)
 without the user's approval.
 
 When this skill is installed as a Claude Code plugin, a hook also checks
