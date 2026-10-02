@@ -1,0 +1,14 @@
+{
+  "name": "antidote",
+  "owner": {
+    "name": "marckengland",
+    "url": "https://github.com/marckengland"
+  },
+  "plugins": [
+    {
+      "name": "antidote",
+      "source": "./",
+      "description": "No poison without an antidote: agents prepare and verify a rollback before risky pushes, merges, migrations and deploys."
+    }
+  ]
+}
