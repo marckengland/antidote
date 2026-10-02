@@ -1,6 +1,6 @@
 # antidote
 
-**Every virus needs an antidote.**
+**Every poison needs an antidote.**
 
 An [Agent Skill](https://agentskills.io) that makes coding agents prepare,
 verify and write down a way to undo a risky change *before* they make it. That

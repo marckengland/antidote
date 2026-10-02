@@ -1,6 +1,6 @@
 {
   "name": "antidote",
-  "description": "Every virus needs an antidote: skills and hooks that make agents prepare a rollback before risky changes.",
+  "description": "Every poison needs an antidote: skills and hooks that make agents prepare a rollback before risky changes.",
   "owner": {
     "name": "marckengland",
     "url": "https://github.com/marckengland"
@@ -9,7 +9,7 @@
     {
       "name": "antidote",
       "source": "./",
-      "description": "Every virus needs an antidote: agents prepare and verify a rollback before risky pushes, merges, migrations and deploys."
+      "description": "Every poison needs an antidote: agents prepare and verify a rollback before risky pushes, merges, migrations and deploys."
     }
   ]
 }

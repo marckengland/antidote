@@ -5,7 +5,7 @@ description: Prepare a tested way to undo a risky change BEFORE making it. Use w
 
 # Antidote
 
-**Every virus needs an antidote.** Before you run anything that is hard to undo
+**Every poison needs an antidote.** Before you run anything that is hard to undo
 or that other people depend on, have the cure ready:
 
 1. a **snapshot** of the state you would go back to,

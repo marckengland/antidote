@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code PreToolUse hook: every virus needs an antidote.
+"""Claude Code PreToolUse hook: every poison needs an antidote.
 
 Looks at Bash commands and PR-merge tool calls before they run:
 
