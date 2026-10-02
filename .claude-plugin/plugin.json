@@ -1,0 +1,13 @@
+{
+  "name": "antidote",
+  "version": "0.1.0",
+  "description": "No poison without an antidote: agents prepare and verify a rollback before risky pushes, merges, migrations and deploys.",
+  "author": {
+    "name": "marckengland",
+    "url": "https://github.com/marckengland"
+  },
+  "homepage": "https://github.com/marckengland/antidote",
+  "repository": "https://github.com/marckengland/antidote",
+  "license": "MIT",
+  "keywords": ["rollback", "git", "safety", "undo", "migrations", "deploy"]
+}
