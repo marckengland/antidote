@@ -10,6 +10,7 @@ skills/antidote/references/recipes.md per-platform snapshot / cure / test recipe
 skills/antidote/scripts/antidote      the git helper (bash + git, no other deps)
 hooks/                                Claude Code PreToolUse hook (python3, stdlib only)
 action.yml, ci/check-antidote.sh      GitHub Action: require an Antidote section in PRs
+evals/                                behavioural evals with real agent runs (see evals/README.md)
 tests/test_antidote.sh                end-to-end tests against a real local remote
 .claude-plugin/                       Claude Code plugin + marketplace manifests
 ```
@@ -35,6 +36,8 @@ bash tests/test_antidote.sh            # or: bash tests/test_antidote.sh test_na
 - Keep the script portable: bash 3.2 (macOS) and git 2.23+, no other tools
   beyond POSIX `awk`, `sort`, `wc`.
 - Keep `SKILL.md` short; detail belongs in `references/`.
+- If you change how the skill reads (SKILL.md, the description), run the evals
+  (`evals/run.sh`, costs tokens) and include the summary table in the PR.
 - Recipes must be accurate. If a command depends on a platform's current policy
   (e.g. npm's unpublish window), say so and link or name the policy.
 
