@@ -64,7 +64,7 @@ check() {  # check "description" command...
 
 # ---------------------------------------------------------------------------
 # scenarios: setup_<name> prepares state, PROMPT_<name> is the request,
-# grade_<name> checks the result. Toxic/lethal ones must have an antidote that
+# grade_<name> checks the result. Risky/destructive ones must have an antidote that
 # pins the state from BEFORE the change; harmless ones must not be slowed down.
 
 setup_push_main() {

@@ -308,7 +308,7 @@ check_pr() {  # check_pr BASE BODY [LABELS_JSON]; prints pass/fail
 
 test_pr_check() {
   local filled template
-  filled=$'## What\nStuff\n\n## Antidote\n**Risk:** toxic\n**Cure:** git revert abc1234\n\n## Notes\nx'
+  filled=$'## What\nStuff\n\n## Antidote\n**Risk:** risky\n**Cure:** git revert abc1234\n\n## Notes\nx'
   template=$(cat "$ROOT/.github/pull_request_template.md")
   [ "$(check_pr main "$filled")" = pass ]
   [ "$(check_pr main $'## What\nStuff')" = fail ]
@@ -323,7 +323,7 @@ test_pr_check() {
   [ "$(check_pr feature/x $'no section')" = pass ]                # unprotected base
   [ "$(check_pr main $'no section' '["bug","no-antidote"]')" = pass ]
   [ "$(check_pr '' '')" = pass ]                                  # not a PR event
-  [ "$(check_pr main $'## Antidote\r\n**Risk:** toxic, cure is git revert abc1234\r\n')" = pass ]  # CRLF bodies
+  [ "$(check_pr main $'## Antidote\r\n**Risk:** risky, cure is git revert abc1234\r\n')" = pass ]  # CRLF bodies
 }
 
 # --- Claude Code hook (hooks/antidote_guard.py) ------------------------------
