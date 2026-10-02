@@ -5,8 +5,9 @@ description: Prepare a tested way to undo a risky change BEFORE making it. Use w
 
 # Antidote
 
-**No poison without an antidote.** Before you run anything that is hard to undo
-or that other people depend on, have the cure ready:
+**Never release a virus without its antidote.** Every outbreak starts with one
+push. Before you run anything that is hard to undo or that spreads to other
+people, have the cure ready:
 
 1. a **snapshot** of the state you would go back to,
 2. the **exact undo commands**, with real commit hashes, versions and names filled in,
@@ -16,25 +17,25 @@ or that other people depend on, have the cure ready:
 If you cannot make an antidote for a change, stop and tell the user before you
 make the change. Never say an antidote exists unless you have checked it.
 
-## 1. Assess the toxicity
+## 1. Assess the threat level
 
-Ask: Who else sees this? Can one command undo it? Does it destroy data? Does it
+Ask: Who will this spread to? Can one command undo it? Does it destroy data? Does it
 leave this machine (published, sent, deployed)?
 
-| Level | Examples | What you need |
+| Threat | Examples | What you need |
 |---|---|---|
-| **Harmless** | local commits; pushing your own unshared feature branch; opening a draft PR | Nothing. Carry on. |
-| **Toxic** | pushing to or merging into `main`/`develop`/release branches; merging a PR; dependency or lockfile upgrades; CI/workflow changes; config or feature-flag changes; staging deploys | Steps 2, 3 (quick check) and 4. |
+| **Contained** | local commits; pushing your own unshared feature branch; opening a draft PR | Nothing. Carry on. |
+| **Infectious** | pushing to or merging into `main`/`develop`/release branches; merging a PR; dependency or lockfile upgrades; CI/workflow changes; config or feature-flag changes; staging deploys | Steps 2, 3 (quick check) and 4. |
 | **Lethal** | force-pushing or rewriting shared history; deleting branches, tags or releases; migrations that drop or rewrite data; production deploys; publishing packages; rotating secrets; changing permissions; infra destroy/replace; bulk data changes | Steps 2–4 with a **rehearsed** antidote, plus the user's explicit go-ahead for this specific change. |
 
 When unsure, treat it as one level worse.
 
-Some poisons have **no full antidote**: a published package version can never be
+Some strains have **no full antidote**: a published package version can never be
 reused, a sent email or webhook cannot be unsent, a leaked secret stays leaked,
 deleted data without a backup is gone. Say so plainly, offer the best mitigation
 (yank/deprecate, rotate, restore from backup), and get confirmation first.
 
-## 2. Brew the antidote
+## 2. Synthesize the antidote
 
 ### Git operations: use the helper
 
@@ -100,7 +101,7 @@ An untested antidote is a guess.
   you have the permissions to roll back to it.
 - **Backups:** confirm they are non-empty and restorable (e.g. `pg_restore --list`).
 
-## 4. Write it down
+## 4. Log it
 
 Put the antidote where people will look, normally the PR description, or the
 message to the user before you act. Do not commit antidote files into the repo.
@@ -109,9 +110,9 @@ antidote PR check in CI may fail the PR while the section is empty.
 
 ```markdown
 ## Antidote
-**Risk:** toxic: merges 14 commits into `main`.
+**Risk:** infectious: merges 14 commits into `main`.
 **Before:** `main` was at `abc1234` (pinned as `refs/antidote/20261002-101500-def5678/target`).
-**Symptoms that mean "administer":** CI red on `main`; `/health` not 200 within 5 min.
+**Signs of an outbreak:** CI red on `main`; `/health` not 200 within 5 min.
 **Cure:**
     git switch -c antidote/cure origin/main
     git restore --source=abc1234 --staged --worktree -- :/
@@ -119,13 +120,13 @@ antidote PR check in CI may fail the PR while the section is empty.
 **Tested:** `antidote verify` OK; cure rehearsed in a scratch clone.
 ```
 
-## 5. Administer the poison, then watch for symptoms
+## 5. Release, then watch for signs of an outbreak
 
-Run the risky operation only now. Straight after, check the symptoms you wrote
+Run the risky operation only now. Straight after, check the signs you wrote
 down: CI on the new head, the remote is where you expected, smoke tests, error
 rates or logs. Tell the user what you did and where the antidote is.
 
-## 6. If symptoms appear, administer the antidote
+## 6. Outbreak? Administer the antidote
 
 - Stop making new changes on top.
 - On shared branches prefer **roll forward** (a new commit or revert) over

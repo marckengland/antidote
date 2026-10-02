@@ -1,28 +1,39 @@
 # antidote
 
-**No poison without an antidote.**
+**Every outbreak starts with one push.**
 
-An [Agent Skill](https://agentskills.io) that makes coding agents prepare,
-verify and write down a way to undo a risky change *before* they make it. That
-covers pushing to `main`, merging a PR, force-pushing, rewriting history,
-deleting branches, running migrations, deploying, publishing a package, or
-rotating secrets.
+*Never release a virus without its antidote.*
 
-When you make a poison, you make sure the antidote is ready first. Agents move
-fast and push confidently; this skill makes them stop for ten seconds and answer
-*"if this goes wrong, what exactly do we run?"*, with real commit hashes and
-tested commands rather than "we can always revert".
+An [Agent Skill](https://agentskills.io) that makes coding agents synthesize,
+test and log the cure for a risky change *before* they release it: pushing to
+`main`, merging a PR, force-pushing, rewriting history, deleting branches,
+running migrations, deploying, publishing a package, rotating secrets.
+
+Agents move fast and push with total confidence. One bad push to `main`, one
+`DROP TABLE`, one force-push over a teammate's work, and it spreads: to every
+clone, every pipeline, every user. This skill makes the agent stop and answer
+*"if this gets out, what exactly do we run to contain it?"*, with real commit
+hashes and a tested cure, not "we can always revert".
+
+```text
+THREAT LEVEL   WHAT IT LOOKS LIKE                                     ANTIDOTE
+CONTAINED      local commits, your own feature branch                 not needed
+INFECTIOUS     spreads to others: push/merge to main, dependency      required
+               bumps, config, CI changes
+LETHAL         destroys or escapes: force-push, deleted branches or   required, rehearsed,
+               tags, DROP TABLE, prod deploys, publishing, secrets    and your go-ahead
+```
 
 ## What the agent does
 
-1. **Assess the toxicity.** Harmless, toxic or lethal, decided by who else sees
-   the change, whether one command can undo it, and whether it destroys data.
-2. **Brew the antidote.** Snapshot the state to return to and generate the exact
-   cure commands.
-3. **Test it.** Verify the snapshot and, for lethal changes, rehearse the cure.
-4. **Write it down.** An `## Antidote` section in the PR or in its message to you.
-5. **Administer the poison** and watch for the symptoms it defined up front.
-6. **Cure** if symptoms appear: roll forward first, rewind with
+1. **Assess the threat level.** Contained, infectious or lethal, decided by who
+   it spreads to, whether one command can undo it, and whether it destroys data.
+2. **Synthesize the antidote.** Snapshot the state to return to and generate the
+   exact cure.
+3. **Test it.** Verify the snapshot and, for lethal strains, rehearse the cure.
+4. **Log it.** An `## Antidote` section in the PR or in its message to you.
+5. **Release**, then watch for the signs of an outbreak it defined up front.
+6. **Outbreak? Administer the antidote.** Roll forward first, rewind with
    `--force-with-lease` only when safe, and ask you before anything lethal.
 
 See [`skills/antidote/SKILL.md`](skills/antidote/SKILL.md) for the full
@@ -171,7 +182,7 @@ Requires bash and git 2.23 or newer.
 [`evals/`](evals/) runs real `claude -p` sessions against scratch repos and
 grades the end state: was there an antidote pinning the "before" state for the
 risky changes (push to `main`, force-push, branch deletion, dropping a table),
-and **no** antidote ceremony for harmless ones? Each scenario runs without the
+and **no** antidote ceremony for contained ones? Each scenario runs without the
 skill, with the skill, and with the full plugin.
 
 ## Contributing

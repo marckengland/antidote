@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # antidote: snapshot git state before a risky operation and write down the exact
-# commands that undo it, so the cure exists before the poison is administered.
+# commands that undo it. Never release a virus without its antidote.
 #
 # https://github.com/marckengland/antidote (MIT License)
 #
