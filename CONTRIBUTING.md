@@ -9,6 +9,7 @@ skills/antidote/SKILL.md              instructions the agent follows
 skills/antidote/references/recipes.md per-platform snapshot / cure / test recipes
 skills/antidote/scripts/antidote      the git helper (bash + git, no other deps)
 hooks/                                Claude Code PreToolUse hook (python3, stdlib only)
+action.yml, ci/check-antidote.sh      GitHub Action: require an Antidote section in PRs
 tests/test_antidote.sh                end-to-end tests against a real local remote
 .claude-plugin/                       Claude Code plugin + marketplace manifests
 ```
@@ -21,8 +22,11 @@ kebab-case description (e.g. `fix/bundle-verify`).
 
 ## Before opening a PR
 
+PRs into `main` need a filled-in `## Antidote` section (the PR template has
+one; CI checks it). For a harmless change, one line saying why is enough.
+
 ```bash
-shellcheck skills/antidote/scripts/antidote tests/test_antidote.sh
+shellcheck skills/antidote/scripts/antidote tests/test_antidote.sh ci/check-antidote.sh
 bash tests/test_antidote.sh            # or: bash tests/test_antidote.sh test_name ...
 ```
 

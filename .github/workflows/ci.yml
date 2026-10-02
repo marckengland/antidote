@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: ShellCheck
         if: runner.os == 'Linux'
-        run: shellcheck skills/antidote/scripts/antidote tests/test_antidote.sh
+        run: shellcheck skills/antidote/scripts/antidote tests/test_antidote.sh ci/check-antidote.sh
       - name: Validate plugin manifests
         run: |
           python3 -m json.tool .claude-plugin/plugin.json > /dev/null
