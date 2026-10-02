@@ -1,0 +1,31 @@
+name: Antidote check
+description: Fail pull requests into protected branches that have no filled-in "## Antidote" (rollback plan) section.
+author: marckengland
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  base-branches:
+    description: Space-separated globs of base branches whose PRs need an antidote.
+    default: "main master trunk develop release/* production prod"
+  skip-label:
+    description: Label that waives the check for one PR.
+    default: no-antidote
+  min-length:
+    description: Minimum non-whitespace characters the Antidote section must contain.
+    default: "20"
+
+runs:
+  using: composite
+  steps:
+    - name: Check for an Antidote section
+      shell: bash
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+        PR_BASE: ${{ github.event.pull_request.base.ref }}
+        PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        BASE_BRANCHES: ${{ inputs.base-branches }}
+        SKIP_LABEL: ${{ inputs.skip-label }}
+        MIN_LENGTH: ${{ inputs.min-length }}
+      run: bash "$GITHUB_ACTION_PATH/ci/check-antidote.sh"

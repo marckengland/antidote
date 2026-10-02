@@ -246,9 +246,197 @@ test_refuses_outside_repo_and_empty_repo() {
   (cd "$WORK/empty" && refute "$ANTIDOTE" prepare 2>/dev/null)
 }
 
+remote_tag() { git ls-remote origin "refs/tags/$1" | awk -v r="refs/tags/$1" '$2 == r {print $1}'; }
+
+test_tag_move_restore() {
+  git tag -a v1.0 -m "v1.0"; git push --quiet origin v1.0 2>/dev/null
+  local before; before=$(remote_tag v1.0)
+  "$ANTIDOTE" prepare --op tag --target origin/v1.0 > recipe.md 2>/dev/null
+  echo two > a.txt; git commit --quiet -am two
+  git tag -f -a v1.0 -m "moved" >/dev/null; git push --quiet --force origin v1.0 2>/dev/null
+  [ "$(remote_tag v1.0)" != "$before" ]
+  bash -e <(section_cmds recipe.md "moved or deleted") >/dev/null 2>&1
+  [ "$(remote_tag v1.0)" = "$before" ]
+  [ "$(git rev-parse refs/tags/v1.0)" = "$before" ]
+  git cat-file -t "$before" | grep tag >/dev/null   # still the annotated tag object
+}
+
+test_tag_delete_restore_survives_gc() {
+  git tag -a v1.0 -m "v1.0"; git push --quiet origin v1.0 2>/dev/null
+  local before; before=$(remote_tag v1.0)
+  "$ANTIDOTE" prepare --op tag --target origin/v1.0 > recipe.md 2>/dev/null
+  git push --quiet origin :refs/tags/v1.0 2>/dev/null; git tag -d v1.0 >/dev/null
+  git reflog expire --expire=now --all && git gc --quiet --prune=now
+  bash -e <(section_cmds recipe.md "moved or deleted") >/dev/null 2>&1
+  [ "$(remote_tag v1.0)" = "$before" ]
+}
+
+test_new_tag_cure_deletes_it() {
+  "$ANTIDOTE" prepare --op tag --target origin/v2.0 > recipe.md 2>/dev/null
+  git tag v2.0; git push --quiet origin v2.0 2>/dev/null
+  bash -e <(section_cmds recipe.md "should not exist") >/dev/null 2>&1
+  [ -z "$(remote_tag v2.0)" ]
+  refute git rev-parse --verify --quiet refs/tags/v2.0
+}
+
+test_tag_requires_target() {
+  refute "$ANTIDOTE" prepare --op tag 2>/dev/null
+}
+
+test_guard_tags() {
+  "$ANTIDOTE" install-hook 2>/dev/null
+  git tag v1.0; git push --quiet origin v1.0 2>/dev/null          # new tag: allowed
+  echo two > a.txt; git commit --quiet -am two
+  git tag -f v1.0 >/dev/null
+  refute git push --quiet --force origin v1.0 2>err.txt            # move: blocked
+  grep "blocked move of existing tag v1.0" err.txt >/dev/null
+  refute git push --quiet origin :refs/tags/v1.0 2>/dev/null       # delete: blocked
+  "$ANTIDOTE" prepare --op tag --target origin/v1.0 > /dev/null 2>&1
+  git push --quiet --force origin v1.0 2>/dev/null                 # now covered
+  git config --add antidote.protectTag 'release-*'                 # narrow protection
+  git tag -f v1.0 HEAD~1 >/dev/null
+  git push --quiet --force origin v1.0 2>/dev/null                 # v* no longer protected
+}
+
+# --- PR check (ci/check-antidote.sh, used by action.yml) --------------------
+
+check_pr() {  # check_pr BASE BODY [LABELS_JSON]; prints pass/fail
+  if PR_BASE=$1 PR_BODY=$2 PR_LABELS=${3:-[]} BASE_BRANCHES="main release/*" \
+     SKIP_LABEL=no-antidote MIN_LENGTH=20 GITHUB_STEP_SUMMARY='' \
+     bash "$ROOT/ci/check-antidote.sh" > "$WORK/check.out" 2>&1; then echo pass; else echo fail; fi
+}
+
+test_pr_check() {
+  local filled template
+  filled=$'## What\nStuff\n\n## Antidote\n**Risk:** toxic\n**Cure:** git revert abc1234\n\n## Notes\nx'
+  template=$(cat "$ROOT/.github/pull_request_template.md")
+  [ "$(check_pr main "$filled")" = pass ]
+  [ "$(check_pr main $'## What\nStuff')" = fail ]
+  grep "need an '## Antidote' section" "$WORK/check.out" >/dev/null
+  [ "$(check_pr main "$template")" = fail ]                       # unfilled template
+  grep "still the template" "$WORK/check.out" >/dev/null
+  [ "$(check_pr main "${template/\*\*Cure:\*\*/**Cure:** git revert abc1234 (rehearsed)}")" = pass ]
+  [ "$(check_pr main $'### antidote:\nHarmless: docs-only change, nothing to undo.')" = pass ]
+  [ "$(check_pr main $'## Antidote\n\n## Next\nlots of text that is not in the antidote section at all')" = fail ]
+  [ "$(check_pr main $'## Antidote\n<!-- a long comment that should not count as content -->\n')" = fail ]
+  [ "$(check_pr release/1.2 $'no section')" = fail ]
+  [ "$(check_pr feature/x $'no section')" = pass ]                # unprotected base
+  [ "$(check_pr main $'no section' '["bug","no-antidote"]')" = pass ]
+  [ "$(check_pr '' '')" = pass ]                                  # not a PR event
+  [ "$(check_pr main $'## Antidote\r\n**Risk:** toxic, cure is git revert abc1234\r\n')" = pass ]  # CRLF bodies
+}
+
+# --- Claude Code hook (hooks/antidote_guard.py) ------------------------------
+
+HOOK="$ROOT/hooks/antidote_guard.py"
+
+# Feed a tool call to the hook; print allow / ask / deny.
+hook_json() {
+  local out
+  out=$(printf '%s' "$1" | PATH="$WORK/bin:$PATH" python3 "$HOOK")
+  if [ -z "$out" ]; then echo allow; else
+    printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["permissionDecision"])'
+  fi
+}
+hook_bash() {
+  hook_json "$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","cwd":sys.argv[2],"tool_input":{"command":sys.argv[1]}}))' "$1" "${2:-$PWD}")"
+}
+fake_gh() {  # gh that reports base branch $1 for any PR
+  mkdir -p "$WORK/bin"
+  printf '#!/bin/sh\necho %s\n' "$1" > "$WORK/bin/gh"
+  chmod +x "$WORK/bin/gh"
+}
+
+test_hook_denies_unprotected_push_to_main_without_pushing() {
+  echo two > a.txt; git commit --quiet -am two
+  local before; before=$(remote_main)
+  [ "$(hook_bash 'git push origin main')" = deny ]
+  [ "$(hook_bash 'git push')" = deny ]
+  [ "$(remote_main)" = "$before" ]   # the dry run pushed nothing
+}
+
+test_hook_allows_after_prepare() {
+  echo two > a.txt; git commit --quiet -am two
+  "$ANTIDOTE" prepare --op push > /dev/null 2>&1
+  [ "$(hook_bash 'git push origin main')" = allow ]
+}
+
+test_hook_allows_feature_branch_and_strips_set_upstream() {
+  git switch --quiet -c feature
+  [ "$(hook_bash 'git push -u origin feature')" = allow ]
+  [ -z "$(git config --get branch.feature.remote || true)" ]
+  [ -z "$(git ls-remote origin refs/heads/feature)" ]
+}
+
+test_hook_asks_on_bypass() {
+  echo two > a.txt; git commit --quiet -am two
+  [ "$(hook_bash 'git push --no-verify origin main')" = ask ]
+  [ "$(hook_bash 'ANTIDOTE_SKIP=1 git push origin main')" = ask ]
+  [ "$(hook_bash 'git -c core.hooksPath=/dev/null push origin main')" = ask ]
+}
+
+test_hook_follows_cd_and_git_C() {
+  echo two > a.txt; git commit --quiet -am two
+  [ "$(hook_bash "cd $WORK/repo && git push origin main" "$WORK")" = deny ]
+  [ "$(hook_bash "git -C $WORK/repo push origin main" "$WORK")" = deny ]
+  [ "$(hook_bash "git status; echo ok" "$WORK")" = allow ]
+}
+
+test_hook_can_be_disabled_per_repo() {
+  echo two > a.txt; git commit --quiet -am two
+  git config antidote.enabled false
+  [ "$(hook_bash 'git push origin main')" = allow ]
+}
+
+test_hook_gh_pr_merge() {
+  fake_gh main
+  [ "$(hook_bash 'gh pr merge 7 --squash')" = deny ]
+  "$ANTIDOTE" prepare --op merge --target origin/main > /dev/null 2>&1
+  [ "$(hook_bash 'gh pr merge 7 --squash')" = allow ]
+  # Stale once main moves.
+  git clone --quiet "$WORK/remote.git" "$WORK/other" 2>/dev/null
+  (cd "$WORK/other" && echo x > x.txt && git add x.txt && git commit --quiet -m x && git push --quiet origin main 2>/dev/null)
+  [ "$(hook_bash 'gh pr merge 7 --squash')" = deny ]
+}
+
+test_hook_gh_pr_merge_checks_base_branch() {
+  git push --quiet origin main:develop 2>/dev/null
+  fake_gh develop
+  "$ANTIDOTE" prepare --op merge --target origin/main > /dev/null 2>&1
+  [ "$(hook_bash 'gh pr merge 7')" = deny ]
+  "$ANTIDOTE" prepare --op merge --target origin/develop > /dev/null 2>&1
+  [ "$(hook_bash 'gh pr merge 7')" = allow ]
+}
+
+test_hook_mcp_merge_tool() {
+  fake_gh main
+  local call
+  call=$(printf '{"tool_name":"mcp__github__merge_pull_request","cwd":"%s","tool_input":{"owner":"o","repo":"r","pullNumber":7}}' "$PWD")
+  [ "$(hook_json "$call")" = deny ]
+  "$ANTIDOTE" prepare --op merge --target origin/main > /dev/null 2>&1
+  [ "$(hook_json "$call")" = allow ]
+}
+
+test_hook_denies_tag_deletion() {
+  git tag v1.0; git push --quiet origin v1.0 2>/dev/null
+  [ "$(hook_bash 'git push origin :refs/tags/v1.0')" = deny ]
+  [ "$(hook_bash 'git push origin --delete v1.0')" = deny ]
+  [ -n "$(remote_tag v1.0)" ]
+}
+
+test_hook_ignores_unparseable_and_other_tools() {
+  [ "$(hook_bash 'echo "unbalanced')" = allow ]
+  [ "$(hook_json '{"tool_name":"Read","tool_input":{"file_path":"x"}}')" = allow ]
+  [ "$(hook_json 'not json')" = allow ]
+}
+
 # ---------------------------------------------------------------------------
 
 tests=$(declare -F | awk '{print $3}' | grep '^test_')
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 not found: skipping Claude Code hook tests"
+  tests=$(printf '%s\n' "$tests" | grep -v '^test_hook_')
+fi
 if [ $# -gt 0 ]; then tests="$*"; fi
 for t in $tests; do run "$t"; done
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

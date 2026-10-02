@@ -1,0 +1,17 @@
+{
+  "description": "antidote: deny risky pushes and PR merges until an antidote has been prepared",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|mcp__.*merge_pull_request",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/antidote_guard.py\"",
+            "timeout": 90
+          }
+        ]
+      }
+    ]
+  }
+}

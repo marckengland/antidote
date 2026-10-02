@@ -1,5 +1,6 @@
 {
   "name": "antidote",
+  "description": "No poison without an antidote: skills and hooks that make agents prepare a rollback before risky changes.",
   "owner": {
     "name": "marckengland",
     "url": "https://github.com/marckengland"
