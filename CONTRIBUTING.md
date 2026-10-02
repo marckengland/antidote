@@ -12,6 +12,12 @@ tests/test_antidote.sh                end-to-end tests against a real local remo
 .claude-plugin/                       Claude Code plugin + marketplace manifests
 ```
 
+## Branches
+
+Branch from `main` and name the branch with a type prefix: `feat/`, `fix/`,
+`docs/`, `chore/`, `refactor/`, `test/`, `ci/` or `perf/`, then a short
+kebab-case description (e.g. `fix/bundle-verify`).
+
 ## Before opening a PR
 
 ```bash
