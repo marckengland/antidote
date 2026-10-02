@@ -8,6 +8,9 @@
   followed by a short kebab-case description (e.g. `feat/pre-push-hook`, `fix/bundle-verify`).
 - Open PRs from those branches into `main`, filling in every section of
   `.github/pull_request_template.md`, including `## Antidote` (CI checks it).
+- Commits are authored by the maintainer (Marck England). Do not add AI
+  attribution: no `Co-Authored-By: Claude` or `Claude-Session:` trailers, no
+  "Generated with Claude Code" lines in commits or PR descriptions.
 
 ## Checks before pushing
 

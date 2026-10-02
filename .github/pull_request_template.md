@@ -10,6 +10,6 @@ For git changes, `skills/antidote/scripts/antidote prepare` prints most of this 
 -->
 **Risk:**
 **Before:**
-**Symptoms that mean "administer":**
+**Warning signs:**
 **Cure:**
 **Tested:**
