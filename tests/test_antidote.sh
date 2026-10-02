@@ -298,6 +298,34 @@ test_guard_tags() {
   git push --quiet --force origin v1.0 2>/dev/null                 # v* no longer protected
 }
 
+# --- PR check (ci/check-antidote.sh, used by action.yml) --------------------
+
+check_pr() {  # check_pr BASE BODY [LABELS_JSON]; prints pass/fail
+  if PR_BASE=$1 PR_BODY=$2 PR_LABELS=${3:-[]} BASE_BRANCHES="main release/*" \
+     SKIP_LABEL=no-antidote MIN_LENGTH=20 GITHUB_STEP_SUMMARY='' \
+     bash "$ROOT/ci/check-antidote.sh" > "$WORK/check.out" 2>&1; then echo pass; else echo fail; fi
+}
+
+test_pr_check() {
+  local filled template
+  filled=$'## What\nStuff\n\n## Antidote\n**Risk:** toxic\n**Cure:** git revert abc1234\n\n## Notes\nx'
+  template=$(cat "$ROOT/.github/pull_request_template.md")
+  [ "$(check_pr main "$filled")" = pass ]
+  [ "$(check_pr main $'## What\nStuff')" = fail ]
+  grep "need an '## Antidote' section" "$WORK/check.out" >/dev/null
+  [ "$(check_pr main "$template")" = fail ]                       # unfilled template
+  grep "still the template" "$WORK/check.out" >/dev/null
+  [ "$(check_pr main "${template/\*\*Cure:\*\*/**Cure:** git revert abc1234 (rehearsed)}")" = pass ]
+  [ "$(check_pr main $'### antidote:\nHarmless: docs-only change, nothing to undo.')" = pass ]
+  [ "$(check_pr main $'## Antidote\n\n## Next\nlots of text that is not in the antidote section at all')" = fail ]
+  [ "$(check_pr main $'## Antidote\n<!-- a long comment that should not count as content -->\n')" = fail ]
+  [ "$(check_pr release/1.2 $'no section')" = fail ]
+  [ "$(check_pr feature/x $'no section')" = pass ]                # unprotected base
+  [ "$(check_pr main $'no section' '["bug","no-antidote"]')" = pass ]
+  [ "$(check_pr '' '')" = pass ]                                  # not a PR event
+  [ "$(check_pr main $'## Antidote\r\n**Risk:** toxic, cure is git revert abc1234\r\n')" = pass ]  # CRLF bodies
+}
+
 # --- Claude Code hook (hooks/antidote_guard.py) ------------------------------
 
 HOOK="$ROOT/hooks/antidote_guard.py"
