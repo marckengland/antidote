@@ -57,6 +57,7 @@ $ antidote prepare --op push --target origin/main --note "release 2.3"
 | `verify [id]` | Check the snapshot still resolves, the bundle (if any) is valid, and whether the remote moved since. Non-zero exit if unusable. |
 | `show [id]` / `list` | Print a recipe / list antidotes. |
 | `drop <id>` / `prune [--keep N]` | Remove antidotes and their refs. |
+| `covers --op OP [--branch B]` | Exit 0 if a fresh antidote exists for OP (on B). Used before server-side PR merges. |
 | `install-hook` | Install a `pre-push` hook that blocks pushes to protected branches without a matching antidote. |
 
 Snapshots are plain git refs, so they survive `git gc`, rebases and branch
@@ -76,9 +77,40 @@ prepared for exactly that push: same branch, same "before" commit on the
 remote, same commit being pushed. Prepare again after new commits. Skip once
 with `ANTIDOTE_SKIP=1 git push ...`.
 
+### The Claude Code hook
+
+Installing the plugin also installs a `PreToolUse` hook
+([`hooks/antidote_guard.py`](hooks/antidote_guard.py), needs `python3`). It
+stops the agent before the risky command runs, rather than after git rejects it:
+
+| The agent runs | The hook |
+|---|---|
+| `git push ...` | Runs the same push with `--dry-run` through the antidote guard, so git itself decides which refs would change. A protected branch without a matching antidote is **denied** and the agent is told how to prepare one. Nothing is pushed. |
+| `git push --no-verify`, `ANTIDOTE_SKIP=1 git push`, `git -c core.hooksPath=... push` | **Asks you**, since these skip the guard. |
+| `gh pr merge` or a GitHub MCP `merge_pull_request` tool | **Denied** unless `antidote covers --op merge` finds a merge antidote for the PR's base branch that is still fresh (the base hasn't moved). |
+
+Anything it can't parse is allowed, and the git `pre-push` hook stays the
+backstop. Turn it off for one repo with `git config antidote.enabled false`, or
+everywhere with `ANTIDOTE_HOOK=off`.
+
+Without the plugin, add it to `~/.claude/settings.json` yourself:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|mcp__.*merge_pull_request",
+        "hooks": [{ "type": "command", "command": "python3 /path/to/antidote/hooks/antidote_guard.py", "timeout": 90 }]
+      }
+    ]
+  }
+}
+```
+
 ## Install
 
-**Claude Code (plugin):**
+**Claude Code (plugin, recommended: skill + hook):**
 
 ```text
 /plugin marketplace add marckengland/antidote

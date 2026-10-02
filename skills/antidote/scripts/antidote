@@ -31,6 +31,7 @@ Usage:
   $PROG list
   $PROG drop    ID
   $PROG prune   [--keep N]
+  $PROG covers  --op OP [--branch B] (exit 0 if a fresh antidote exists, e.g. before a PR merge)
   $PROG guard   REMOTE [URL]        (run by the pre-push hook; reads refs on stdin)
   $PROG install-hook [--force]
 
@@ -562,6 +563,47 @@ cmd_guard() {
   [ "$blocked" = 0 ]
 }
 
+# Is there a still-fresh antidote for OP (optionally on BRANCH)? Used for
+# operations that never pass through a local pre-push hook, like server-side
+# PR merges. Fresh means the remote target has not moved since it was prepared.
+cmd_covers() {
+  local op="" b="" fetch=1
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --op)       need_val "$1" $#; op=$2; shift 2 ;;
+      --op=*)     op=${1#*=}; shift ;;
+      --branch)   need_val "$1" $#; b=$2; shift 2 ;;
+      --branch=*) b=${1#*=}; shift ;;
+      --no-fetch) fetch=0; shift ;;
+      *) die "covers: unknown argument: $1" ;;
+    esac
+  done
+  [ -n "$op" ] || die "covers needs --op"
+  local id remote tb tsha now
+  for id in $(list_ids | sort -r); do
+    [ "$(rec_get "$id" op)" = "$op" ] || continue
+    tb=$(rec_get "$id" target)
+    if [ -n "$b" ] && [ "$tb" != "$b" ]; then continue; fi
+    remote=$(rec_get "$id" remote)
+    tsha=$(rec_get "$id" targetsha)
+    if [ "$fetch" = 1 ] && [ -n "$remote" ]; then
+      if ! now=$(remote_sha "$remote" "$tb"); then
+        printf '%s: cannot reach %s to check antidote %s\n' "$PROG" "$remote" "$id" >&2
+        return 1
+      fi
+      if [ "$now" != "$tsha" ]; then
+        printf '%s: antidote %s is stale: %s/%s moved from %s to %s since it was prepared\n' \
+          "$PROG" "$id" "$remote" "$tb" "$(short "$tsha")" "$(short "$now")" >&2
+        return 1
+      fi
+    fi
+    printf '%s\n' "$id"
+    return 0
+  done
+  printf '%s: no antidote prepared for --op %s%s\n' "$PROG" "$op" "${b:+ on $b}" >&2
+  return 1
+}
+
 cmd_install_hook() {
   local force=0
   case ${1:-} in --force) force=1 ;; '') ;; *) die "install-hook: unknown argument: $1" ;; esac
@@ -602,6 +644,7 @@ main() {
     drop)         cmd_drop "$@" ;;
     prune)        cmd_prune "$@" ;;
     guard)        cmd_guard "$@" ;;
+    covers)       cmd_covers "$@" ;;
     install-hook) cmd_install_hook "$@" ;;
     *) die "unknown command '$cmd' (see: $PROG --help)" ;;
   esac

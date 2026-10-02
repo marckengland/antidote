@@ -58,7 +58,7 @@ offline copy you can move off the machine. `--target` defaults to the current
 branch's upstream; `--head REV` snapshots something other than HEAD.
 
 Other commands: `verify [id]`, `show [id]`, `list`, `drop <id>`, `prune --keep N`,
-`install-hook` (see Guardrail below). Records live in `.git/antidote/` and are
+`covers --op OP [--branch B]`, `install-hook` (see Guardrail below). Records live in `.git/antidote/` and are
 never committed or pushed.
 
 If the helper cannot run, do it by hand and write the recipe yourself:
@@ -138,3 +138,8 @@ change with `git config --add antidote.protect '<glob>'`) unless an antidote
 was prepared for exactly that push: same branch, same remote "before" commit,
 same commit being pushed. Never bypass it (`ANTIDOTE_SKIP=1` or `--no-verify`)
 without the user's approval.
+
+When this skill is installed as a Claude Code plugin, a hook also checks
+`git push`, `gh pr merge` and MCP `merge_pull_request` calls before they run.
+If it denies one, do what its message says (prepare the antidote, then retry);
+do not try to get around it.
