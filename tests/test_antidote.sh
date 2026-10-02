@@ -186,7 +186,8 @@ test_guard_blocks_then_allows() {
   "$ANTIDOTE" install-hook 2>/dev/null
   echo two > a.txt; git commit --quiet -am two
   refute git push --quiet origin main 2>err.txt
-  grep -q 'blocked push to protected branch main' err.txt
+  grep -q "blocked push to protected branch main" err.txt
+  grep -q "and main at [0-9a-f]\{7\}\.)" err.txt
   "$ANTIDOTE" prepare --op push > /dev/null 2>&1
   git push --quiet origin main 2>/dev/null
   # A later commit is not covered by the old antidote.

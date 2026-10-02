@@ -551,8 +551,9 @@ cmd_guard() {
         printf '  Prepare one, then push again:\n'
         printf '    %s prepare --op <push|force-push|merge|delete-branch> --target %s/%s\n' "$SELF" "$remote" "$b"
         if [ "$deleting" = 0 ]; then
-          printf '  (It must be prepared with HEAD, or --head, at %s and %s at %s.)\n' \
-            "$(short "$lsha")" "$b" "${want:+$(short "$want")}${want:-nothing}"
+          local was="not existing yet"
+          if [ -n "$want" ]; then was="at $(short "$want")"; fi
+          printf '  (It must be prepared with HEAD, or --head, at %s and %s %s.)\n' "$(short "$lsha")" "$b" "$was"
         fi
         printf '  To skip the check once, with the user'"'"'s approval: ANTIDOTE_SKIP=1 git push ...\n'
       } >&2
