@@ -28,7 +28,7 @@ Use `scripts/antidote prepare --op <op>`; it writes these for you. For reference
 | Force-push | remote tip before | `git push --force-with-lease=refs/heads/<b>:<pushed> origin <before>:refs/heads/<b>` |
 | Rebase / reset / amend | `git update-ref refs/antidote/<name> HEAD` | `git reset --hard <before>` or `git branch rescue <before>`. `git reflog` is the last resort, but it is local and expires. |
 | Delete a branch | its tip | `git push origin <sha>:refs/heads/<branch>` |
-| Delete or move a tag | `git ls-remote --tags origin <tag>` (annotated tags show the tag object and `^{}` commit) | `git push origin <tag-object-sha>:refs/tags/<tag>`; force-pushing tags breaks anyone who already fetched them, so say so |
+| Delete or move a tag | `antidote prepare --op tag --target origin/<tag>` (or `git ls-remote --tags origin <tag>`; annotated tags show the tag object and `^{}` commit) | `git push --force origin <tag-object-sha>:refs/tags/<tag>`. Clones that already fetched the tag keep the old one, and pipelines it triggered have already run, so say so |
 | Delete a GitHub release | `gh release view <tag> --json name,body,tagName,isDraft,isPrerelease,assets > release.json` and `gh release download <tag> -D release-assets/` | `gh release create <tag> release-assets/* --title ... --notes-file ...` |
 | `git filter-repo` / history purge | `git clone --mirror` to a safe place, or `antidote prepare --op rewrite --bundle` | push the mirror back with the user's approval. If you are purging a leaked secret, rotate the secret: rewriting history does not un-leak it. |
 

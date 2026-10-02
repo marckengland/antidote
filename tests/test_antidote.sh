@@ -246,6 +246,58 @@ test_refuses_outside_repo_and_empty_repo() {
   (cd "$WORK/empty" && refute "$ANTIDOTE" prepare 2>/dev/null)
 }
 
+remote_tag() { git ls-remote origin "refs/tags/$1" | awk -v r="refs/tags/$1" '$2 == r {print $1}'; }
+
+test_tag_move_restore() {
+  git tag -a v1.0 -m "v1.0"; git push --quiet origin v1.0 2>/dev/null
+  local before; before=$(remote_tag v1.0)
+  "$ANTIDOTE" prepare --op tag --target origin/v1.0 > recipe.md 2>/dev/null
+  echo two > a.txt; git commit --quiet -am two
+  git tag -f -a v1.0 -m "moved" >/dev/null; git push --quiet --force origin v1.0 2>/dev/null
+  [ "$(remote_tag v1.0)" != "$before" ]
+  bash -e <(section_cmds recipe.md "moved or deleted") >/dev/null 2>&1
+  [ "$(remote_tag v1.0)" = "$before" ]
+  [ "$(git rev-parse refs/tags/v1.0)" = "$before" ]
+  git cat-file -t "$before" | grep tag >/dev/null   # still the annotated tag object
+}
+
+test_tag_delete_restore_survives_gc() {
+  git tag -a v1.0 -m "v1.0"; git push --quiet origin v1.0 2>/dev/null
+  local before; before=$(remote_tag v1.0)
+  "$ANTIDOTE" prepare --op tag --target origin/v1.0 > recipe.md 2>/dev/null
+  git push --quiet origin :refs/tags/v1.0 2>/dev/null; git tag -d v1.0 >/dev/null
+  git reflog expire --expire=now --all && git gc --quiet --prune=now
+  bash -e <(section_cmds recipe.md "moved or deleted") >/dev/null 2>&1
+  [ "$(remote_tag v1.0)" = "$before" ]
+}
+
+test_new_tag_cure_deletes_it() {
+  "$ANTIDOTE" prepare --op tag --target origin/v2.0 > recipe.md 2>/dev/null
+  git tag v2.0; git push --quiet origin v2.0 2>/dev/null
+  bash -e <(section_cmds recipe.md "should not exist") >/dev/null 2>&1
+  [ -z "$(remote_tag v2.0)" ]
+  refute git rev-parse --verify --quiet refs/tags/v2.0
+}
+
+test_tag_requires_target() {
+  refute "$ANTIDOTE" prepare --op tag 2>/dev/null
+}
+
+test_guard_tags() {
+  "$ANTIDOTE" install-hook 2>/dev/null
+  git tag v1.0; git push --quiet origin v1.0 2>/dev/null          # new tag: allowed
+  echo two > a.txt; git commit --quiet -am two
+  git tag -f v1.0 >/dev/null
+  refute git push --quiet --force origin v1.0 2>err.txt            # move: blocked
+  grep "blocked move of existing tag v1.0" err.txt >/dev/null
+  refute git push --quiet origin :refs/tags/v1.0 2>/dev/null       # delete: blocked
+  "$ANTIDOTE" prepare --op tag --target origin/v1.0 > /dev/null 2>&1
+  git push --quiet --force origin v1.0 2>/dev/null                 # now covered
+  git config --add antidote.protectTag 'release-*'                 # narrow protection
+  git tag -f v1.0 HEAD~1 >/dev/null
+  git push --quiet --force origin v1.0 2>/dev/null                 # v* no longer protected
+}
+
 # --- Claude Code hook (hooks/antidote_guard.py) ------------------------------
 
 HOOK="$ROOT/hooks/antidote_guard.py"
@@ -335,6 +387,13 @@ test_hook_mcp_merge_tool() {
   [ "$(hook_json "$call")" = deny ]
   "$ANTIDOTE" prepare --op merge --target origin/main > /dev/null 2>&1
   [ "$(hook_json "$call")" = allow ]
+}
+
+test_hook_denies_tag_deletion() {
+  git tag v1.0; git push --quiet origin v1.0 2>/dev/null
+  [ "$(hook_bash 'git push origin :refs/tags/v1.0')" = deny ]
+  [ "$(hook_bash 'git push origin --delete v1.0')" = deny ]
+  [ -n "$(remote_tag v1.0)" ]
 }
 
 test_hook_ignores_unparseable_and_other_tools() {

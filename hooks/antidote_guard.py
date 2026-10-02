@@ -104,10 +104,10 @@ def check_push(git_opts, args, env_prefix, cwd):
         env.pop("ANTIDOTE_SKIP", None)
         r = run(["git", *git_opts, "-c", "core.hooksPath=" + hooks,
                  "push", "--dry-run", *push_args], cwd, env=env)
-    if r is None or "blocked push to protected branch" not in r.stderr:
+    if r is None or "antidote: blocked " not in r.stderr:
         return  # allowed, or git failed for some other reason the real push will report
     lines = r.stderr.splitlines()
-    start = next(i for i, l in enumerate(lines) if "blocked push" in l)
+    start = next(i for i, l in enumerate(lines) if "antidote: blocked " in l)
     decide("deny", "\n".join(l for l in lines[start:] if not l.startswith("error:")))
 
 
