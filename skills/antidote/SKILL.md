@@ -99,6 +99,8 @@ An untested antidote is a guess.
 
 Put the antidote where people will look, normally the PR description, or the
 message to the user before you act. Do not commit antidote files into the repo.
+If the repo has a PR template with an `## Antidote` section, fill that in: an
+antidote PR check in CI may fail the PR while the section is empty.
 
 ```markdown
 ## Antidote

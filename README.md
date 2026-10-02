@@ -114,6 +114,32 @@ Without the plugin, add it to `~/.claude/settings.json` yourself:
 }
 ```
 
+### The PR check (GitHub Action)
+
+Fails a pull request into a protected branch unless its description has a
+filled-in `## Antidote` section. Comments and unfilled template labels like
+`**Cure:**` don't count, and one line is enough for a harmless change. This
+covers humans and every agent, whatever tool they use.
+
+```yaml
+# .github/workflows/antidote.yml
+name: Antidote
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+jobs:
+  antidote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: marckengland/antidote@main   # pin a release tag or commit SHA once you adopt it
+        with:
+          base-branches: "main release/*"  # default: main master trunk develop release/* production prod
+          skip-label: no-antidote          # waive it for one PR
+```
+
+Pair it with a PR template containing an `## Antidote` section, like
+[this repo's](.github/pull_request_template.md).
+
 ## Install
 
 **Claude Code (plugin, recommended: skill + hook):**
