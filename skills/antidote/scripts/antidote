@@ -466,7 +466,7 @@ drop_id() {
 }
 
 cmd_drop() {
-  [ $# -ge 1 ] && [ -n "$1" ] || die "drop needs an ID (see: $PROG list)"
+  if [ $# -eq 0 ] || [ -z "$1" ]; then die "drop needs an ID (see: $PROG list)"; fi
   local id
   id=$(resolve_id "$1")
   drop_id "$id"
