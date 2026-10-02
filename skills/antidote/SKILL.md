@@ -1,0 +1,140 @@
+---
+name: antidote
+description: Prepare a tested way to undo a risky change BEFORE making it. Use whenever you are about to push to a shared or protected branch, force-push, merge a PR, rebase/reset/amend history others have, delete a branch or tag, run a database migration, deploy, publish a package or release, bump major dependencies, or change infra, config, permissions or secrets. Also use when the user mentions a rollback plan, undo, revert, backout plan or "antidote".
+---
+
+# Antidote
+
+**Every poison needs an antidote.** Before you run anything that is hard to undo
+or that other people depend on, have the cure ready:
+
+1. a **snapshot** of the state you would go back to,
+2. the **exact undo commands**, with real commit hashes, versions and names filled in,
+3. evidence that the undo **works**, and
+4. a **record** a human can find if you are gone.
+
+If you cannot make an antidote for a change, stop and tell the user before you
+make the change. Never say an antidote exists unless you have checked it.
+
+## 1. Assess the toxicity
+
+Ask: Who else sees this? Can one command undo it? Does it destroy data? Does it
+leave this machine (published, sent, deployed)?
+
+| Level | Examples | What you need |
+|---|---|---|
+| **Harmless** | local commits; pushing your own unshared feature branch; opening a draft PR | Nothing. Carry on. |
+| **Toxic** | pushing to or merging into `main`/`develop`/release branches; merging a PR; dependency or lockfile upgrades; CI/workflow changes; config or feature-flag changes; staging deploys | Steps 2, 3 (quick check) and 4. |
+| **Lethal** | force-pushing or rewriting shared history; deleting branches, tags or releases; migrations that drop or rewrite data; production deploys; publishing packages; rotating secrets; changing permissions; infra destroy/replace; bulk data changes | Steps 2–4 with a **rehearsed** antidote, plus the user's explicit go-ahead for this specific change. |
+
+When unsure, treat it as one level worse.
+
+Some poisons have **no full antidote**: a published package version can never be
+reused, a sent email or webhook cannot be unsent, a leaked secret stays leaked,
+deleted data without a backup is gone. Say so plainly, offer the best mitigation
+(yank/deprecate, rotate, restore from backup), and get confirmation first.
+
+## 2. Brew the antidote
+
+### Git operations: use the helper
+
+This skill ships `scripts/antidote` (bash + git). Run it from inside the repo,
+right before the risky command:
+
+```bash
+<skill-dir>/scripts/antidote prepare --op push          --target origin/main   --note "release 2.3"
+<skill-dir>/scripts/antidote prepare --op merge         --target origin/main   --note "merge PR #42"
+<skill-dir>/scripts/antidote prepare --op force-push    --target origin/feature
+<skill-dir>/scripts/antidote prepare --op rewrite                              # before rebase/reset/amend
+<skill-dir>/scripts/antidote prepare --op delete-branch --target origin/old-thing
+```
+
+It asks the remote where the target branch is *right now*, pins that commit,
+your HEAD and any uncommitted changes under `refs/antidote/<id>/` (so even
+`git gc` cannot lose them), and prints a recipe with copy-pasteable cures:
+a history-preserving **roll forward** and a `--force-with-lease` **rewind** that
+refuses to clobber anyone who pushed after you. Add `--bundle` to also write an
+offline copy you can move off the machine. `--target` defaults to the current
+branch's upstream; `--head REV` snapshots something other than HEAD.
+
+Other commands: `verify [id]`, `show [id]`, `list`, `drop <id>`, `prune --keep N`,
+`install-hook` (see Guardrail below). Records live in `.git/antidote/` and are
+never committed or pushed.
+
+If the helper cannot run, do it by hand and write the recipe yourself:
+
+```bash
+git fetch origin && git rev-parse origin/main        # the "before" commit: write it down
+git update-ref refs/antidote/manual/main <that-sha>  # keep it alive locally
+git stash create                                      # prints a commit of uncommitted work, if any
+```
+
+### Everything else
+
+Databases, deploys, packages, infra, secrets and config each need their own
+antidote. Read [references/recipes.md](references/recipes.md) for the matching
+section before you start.
+
+The antidote must not depend on the thing you are about to break: no backups
+only on the disk being wiped, no rollback that needs the service being replaced,
+no snapshot stored only in the branch being force-pushed.
+
+## 3. Test the antidote
+
+An untested antidote is a guess.
+
+- **Git:** run `scripts/antidote verify`. It checks every snapshot ref still
+  resolves and its objects exist, and warns if the target moved since you
+  prepared (if it did, prepare a fresh antidote; the old one is stale).
+- **Lethal git changes:** rehearse the cure in a throwaway clone or
+  `git worktree` first.
+- **Migrations:** run the down migration (or a restore from the backup) on a
+  copy of the data, not just on an empty database.
+- **Deploys:** confirm the previous version or artifact still exists and that
+  you have the permissions to roll back to it.
+- **Backups:** confirm they are non-empty and restorable (e.g. `pg_restore --list`).
+
+## 4. Write it down
+
+Put the antidote where people will look, normally the PR description, or the
+message to the user before you act. Do not commit antidote files into the repo.
+
+```markdown
+## Antidote
+**Risk:** toxic: merges 14 commits into `main`.
+**Before:** `main` was at `abc1234` (pinned as `refs/antidote/20261002-101500-def5678/target`).
+**Symptoms that mean "administer":** CI red on `main`; `/health` not 200 within 5 min.
+**Cure:**
+    git switch -c antidote/cure origin/main
+    git restore --source=abc1234 --staged --worktree -- :/
+    git commit -m "Restore main to abc1234" && git push origin HEAD:main
+**Tested:** `antidote verify` OK; cure rehearsed in a scratch clone.
+```
+
+## 5. Administer the poison, then watch for symptoms
+
+Run the risky operation only now. Straight after, check the symptoms you wrote
+down: CI on the new head, the remote is where you expected, smoke tests, error
+rates or logs. Tell the user what you did and where the antidote is.
+
+## 6. If symptoms appear, administer the antidote
+
+- Stop making new changes on top.
+- On shared branches prefer **roll forward** (a new commit or revert) over
+  rewinding history; rewind only if nobody else could have pulled.
+- Use `--force-with-lease`, never bare `--force`.
+- Ask the user before running a lethal cure, unless they already authorised it.
+- Afterwards, report what broke, what you ran, and the current state.
+
+## Guardrail: the pre-push hook
+
+```bash
+<skill-dir>/scripts/antidote install-hook
+```
+
+This installs a `pre-push` hook that blocks pushes and deletions on protected
+branches (default `main master trunk develop release/* production prod`;
+change with `git config --add antidote.protect '<glob>'`) unless an antidote
+was prepared for exactly that push: same branch, same remote "before" commit,
+same commit being pushed. Never bypass it (`ANTIDOTE_SKIP=1` or `--no-verify`)
+without the user's approval.
